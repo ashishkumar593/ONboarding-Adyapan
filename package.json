@@ -1,0 +1,54 @@
+{
+  "name": "adyapan-intern-portal",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "node scripts/next.mjs dev",
+    "build": "node scripts/next.mjs build",
+    "start": "node scripts/next.mjs start",
+    "setup:local": "node scripts/setup-local.mjs",
+    "typecheck": "tsc --noEmit",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "3.1177.0",
+    "@fontsource/dm-sans": "5.3.0",
+    "@fontsource/dm-serif-display": "5.3.0",
+    "@fontsource/ibm-plex-mono": "5.3.0",
+    "@pdf-lib/upng": "1.0.1",
+    "client-zip": "2.5.1",
+    "exceljs": "4.4.0",
+    "lucide-react": "1.80.0",
+    "next": "16.4.6",
+    "nodemailer": "10.6.1",
+    "pdf-lib": "1.17.1",
+    "pdfjs-dist": "6.5.438",
+    "pg": "8.23.1",
+    "qrcode": "1.5.4",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "yauzl": "3.4.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.65.1",
+    "@types/node": "26.6.10",
+    "@types/nodemailer": "8.0.2",
+    "@types/pg": "8.23.1",
+    "@types/qrcode": "1.5.6",
+    "@types/react": "19.3.1",
+    "@types/react-dom": "19.3.0",
+    "@types/yauzl": "3.4.0",
+    "jsqr": "1.4.0",
+    "node": "26.13.1",
+    "pngjs": "7.0.0",
+    "typescript": "5.9.3"
+  },
+  "allowScripts": {
+    "node@26.13.1": true
+  },
+  "overrides": {
+    "exceljs": {
+      "uuid": "11.1.1"
+    }
+  }
+}
