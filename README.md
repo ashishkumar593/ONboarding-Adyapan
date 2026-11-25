@@ -2,6 +2,20 @@
 
 A mobile onboarding portal and a password-protected HR workspace. Next.js 16 and React serve both workflows. PostgreSQL stores invitations, drafts, file references, immutable declaration snapshots, review events and issuance records. The project-local Node.js runtime is pinned to 26.13.1.
 
+## Project structure
+
+| Directory | Responsibility |
+| --- | --- |
+| `frontend/app` | Next.js pages, layouts, styles and the route entry point for `/api/[action]`. |
+| `frontend/components`, `frontend/public` | Intern and HR interfaces, browser API calls, and public brand assets. |
+| `backend/api` | HTTP handlers for onboarding, HR review, exports and file access. |
+| `backend/services` | Authentication, database queries, private storage, email delivery and offer issuance. |
+| `backend/database` | PostgreSQL schema used by local setup and production provisioning. |
+| `shared` | Types, document requirements and signature validation used by the frontend and backend. |
+| `scripts`, `tests` | Startup, local provisioning and end-to-end tests. |
+
+The portal deploys as one Next.js application. Browser components call the same-origin API. The API route and the server-rendered invitation page call the backend on the server. Run npm commands from the repository root, where the package manifest, lockfile and environment configuration live. The production build is written to `frontend/.next`.
+
 ## Run the local pilot
 
 From the project folder in PowerShell, use an installed Node.js 24 or 26 and PostgreSQL 18 command-line tools.
@@ -35,7 +49,7 @@ Use **Send** for one person or select multiple interns and choose **Send selecte
 
 Set the environment values listed in `.env.example` through the host's secret manager. Set `PORTAL_MODE=production` and serve the configured `APP_ORIGIN` over HTTPS. Local filesystem document storage, sample terms and the file outbox are enabled only in local mode. Use a dedicated production database and an empty private bucket. Keep the development invitation and local credentials on the development machine.
 
-- **PostgreSQL**. Provision the database, apply `lib/schema.sql` with `psql -v ON_ERROR_STOP=1 -f lib/schema.sql` against the selected database, and set a scoped app connection in `DATABASE_URL`. Configure encrypted backups and a restore drill. Restore a matching private-object backup when restoring database references.
+- **PostgreSQL**. Provision the database, apply `backend/database/schema.sql` with `psql -v ON_ERROR_STOP=1 -f backend/database/schema.sql` against the selected database, and set a scoped app connection in `DATABASE_URL`. Configure encrypted backups and a restore drill. Restore a matching private-object backup when restoring database references.
 - **Storage**. Set `S3_BUCKET`, region and optional S3-compatible endpoint. Use an IAM role or a scoped access key with get/put permissions for the private bucket. Enable versioning and backups. Every preview and download is served by the authorized application endpoint.
 - **HR and terms**. The pilot provisions one authorized HR account. Set its lowercase email and a password hash. Password hashes use `salt:hexDigest` with Node’s `scryptSync(password, salt, 32)`. Set the approved declaration in `TERMS_TEXT` and its identifier in `TERMS_VERSION`. New invitations use the standard seven-file checklist. Existing submitted applications keep their original checklist during HR review and corrections.
 - **Transactional mail**. Set the SMTP connection URL and verified sender. Exercise invitation, sign-in, correction and release delivery in the provider sandbox before switching to live recipients. HR can retry a failed release notification from the issued record.

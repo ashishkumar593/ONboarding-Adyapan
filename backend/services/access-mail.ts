@@ -1,9 +1,17 @@
 import crypto from "node:crypto";
 import type { PoolClient } from "pg";
-import { hash, requireThat, transaction } from "./db";
-import { rosterGroup } from "./model";
+import { hash, pool, requireThat, transaction } from "./db";
+import { rosterGroup } from "@shared/model";
 import { session } from "./auth";
 import { mail } from "./private";
+
+export async function invitationStatus(token: string): Promise<string | null> {
+  if (!/^[\w-]{32}$/.test(token)) return null;
+  const { rows } = await pool.query<{ status: string }>(
+    "SELECT status FROM invitations WHERE token=$1", [token],
+  );
+  return rows[0]?.status ?? null;
+}
 
 type Recipient = {
   id: string;

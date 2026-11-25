@@ -16,7 +16,7 @@ import {
   statuses,
   statusDate,
   type Invitation,
-} from "@/lib/model";
+} from "@shared/model";
 import HrRoster, { type RosterView } from "./HrRoster";
 import IssuedOffer from "./IssuedOffer";
 const initialView: RosterView = { group: "pending", search: "", page: 1, size: 10 };

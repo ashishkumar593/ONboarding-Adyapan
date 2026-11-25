@@ -104,7 +104,7 @@ try {
 const db = new pg.Client({ connectionString: connection.toString() });
 await db.connect();
 try {
-  await db.query(await fs.readFile("lib/schema.sql", "utf8"));
+  await db.query(await fs.readFile("backend/database/schema.sql", "utf8"));
   const email = "intern@adyapan.test";
   let row = (
     await db.query(
@@ -123,7 +123,7 @@ try {
         "Aarya Sharma",
         email,
         "Product Design Intern",
-        await fs.readFile("lib/intern-documents.json", "utf8"),
+        await fs.readFile("shared/intern-documents.json", "utf8"),
       ],
     );
     row = { token };

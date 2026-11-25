@@ -37,7 +37,7 @@ test.beforeAll(async () => {
   await db.connect();
   await db.query("CREATE SCHEMA " + schema);
   await db.query("SET search_path TO " + schema);
-  await db.query(await fs.readFile("lib/schema.sql", "utf8"));
+  await db.query(await fs.readFile("backend/database/schema.sql", "utf8"));
   url.searchParams.set("options", "-c search_path=" + schema);
   dir = await fs.mkdtemp(path.join(os.tmpdir(), "adyapan-test-"));
   const salt = crypto.randomBytes(16).toString("hex");
@@ -46,6 +46,7 @@ test.beforeAll(async () => {
     [
       require.resolve("next/dist/bin/next"),
       "start",
+      "frontend",
       "-H",
       "127.0.0.1",
       "-p",

@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { BlendMode, PDFDocument, concatTransformationMatrix, popGraphicsState, pushGraphicsState, rgb } from "pdf-lib";
 import UPNG from "@pdf-lib/upng";
 import { Problem, requireThat } from "./db";
-import type { Invitation } from "./model";
+import type { Invitation } from "@shared/model";
 import { getDocument, Util } from "pdfjs-dist/legacy/build/pdf.mjs";
 
 function stampInkBounds(bytes: Uint8Array) {

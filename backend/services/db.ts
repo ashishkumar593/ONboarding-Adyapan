@@ -1,6 +1,7 @@
+import "server-only";
 import { Pool, types, type PoolClient } from "pg";
 import crypto from "node:crypto";
-import { currentRequirements, type Invitation } from "./model";
+import { currentRequirements, type Invitation } from "@shared/model";
 types.setTypeParser(1082, (value) => value);
 const globals = globalThis as typeof globalThis & { adyPool?: Pool };
 export const pool = (globals.adyPool ??= new Pool({

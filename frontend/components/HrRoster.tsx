@@ -1,9 +1,9 @@
 "use client";
 import { useState } from "react";
 import { Download, FileCheck2, Mail, Plus, Upload, Send } from "lucide-react";
-import { rosterGroup, statusDate, statuses, type RosterRow } from "@/lib/model";
+import { rosterGroup, statusDate, statuses, type RosterRow } from "@shared/model";
 import { request, form, decodeFile } from "./client";
-import type { exportReceived } from "@/lib/received-export";
+import type { ReceivedExport } from "@shared/received-export";
 export type RosterGroup = ReturnType<typeof rosterGroup>;
 export type RosterView = { group: RosterGroup; search: string; page: number; size: number };
 type Props = {
@@ -67,7 +67,7 @@ export default function HrRoster({
     setProgress("Preparing workbook");
     try {
       const { downloadZip } = await import("client-zip");
-      const bundle: Awaited<ReturnType<typeof exportReceived>> = await request("received-export");
+      const bundle: ReceivedExport = await request("received-export");
       async function* entries() {
         yield { name: "Documents received.xlsx", input: decodeFile(bundle.workbook) };
         yield* bundle.records;

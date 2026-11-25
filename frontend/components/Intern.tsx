@@ -12,7 +12,7 @@ import {
 import { form, request, RequestError, fileUrl, sendFile } from "./client";
 import IssuedOffer from "./IssuedOffer";
 import SignatureField from "./SignatureField";
-import { validDrawing } from "@/lib/signature";
+import { validDrawing } from "@shared/signature";
 import {
   termsAcknowledgement,
   profileValues,
@@ -21,7 +21,7 @@ import {
   statusDate,
   type Slot,
   type Invitation,
-} from "@/lib/model";
+} from "@shared/model";
 
 export default function Intern({ token }: { token: string }) {
   const [inv, setInv] = useState<Invitation | null>(null),

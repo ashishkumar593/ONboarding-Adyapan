@@ -10,8 +10,8 @@ import {
   profileComplete,
   isResume,
   type Invitation,
-} from "./model";
-import { validDrawing } from "./signature";
+} from "@shared/model";
+import { validDrawing } from "@shared/signature";
 
 export function field(data: FormData, key: string, max = 160) {
   const value = data.get(key);

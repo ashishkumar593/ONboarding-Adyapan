@@ -2,7 +2,7 @@ import ExcelJS from "exceljs";
 import { fromBuffer } from "yauzl";
 import { pool, Problem, requireThat, transaction } from "./db";
 import { invitationFields, queueInvite } from "./flow";
-import { rosterGroup, statuses, type RosterRow } from "./model";
+import { rosterGroup, statuses, type RosterRow } from "@shared/model";
 
 const fields = [
   ["name", "Name", 28],

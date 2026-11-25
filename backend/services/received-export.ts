@@ -1,7 +1,8 @@
 import ExcelJS from "exceljs";
+import type { ReceivedExport } from "@shared/received-export";
 import { pool } from "./db";
-import { statuses, type Invitation, type Doc } from "./model";
-import { validDrawing } from "./signature";
+import { statuses, type Invitation, type Doc } from "@shared/model";
+import { validDrawing } from "@shared/signature";
 
 type ReceivedRecord = Pick<Invitation,
   "id" | "name" | "email" | "role" | "starts" | "ends" | "status" |
@@ -26,7 +27,7 @@ function sheet(workbook: ExcelJS.Workbook, name: string, columns: [string, numbe
   return page;
 }
 
-export async function exportReceived() {
+export async function exportReceived(): Promise<ReceivedExport> {
   // Read related metadata in one database snapshot. Stored file IDs are immutable.
   const { rows } = await pool.query<ReceivedRecord>(`
     SELECT i.id,i.name,i.email,i.role,i.starts,i.ends,i.status,i.draft,i.reference,

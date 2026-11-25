@@ -1,5 +1,5 @@
 import Welcome from "@/components/Welcome";
-import { pool } from "@/lib/db";
+import { invitationStatus } from "@backend/services/access-mail";
 import { notFound } from "next/navigation";
 export default async function Page({
   params,
@@ -7,10 +7,9 @@ export default async function Page({
   params: Promise<{ token: string }>;
 }) {
   const { token } = await params;
-  if (!/^[\w-]{32}$/.test(token)) notFound();
-  const { rows } = await pool.query("SELECT status FROM invitations WHERE token=$1", [token]);
-  if (!rows.length) notFound();
-  if (rows[0].status === "queued") {
+  const status = await invitationStatus(token);
+  if (!status) notFound();
+  if (status === "queued") {
     return (
       <main className="narrow">
         <h1>Your invitation is pending</h1>

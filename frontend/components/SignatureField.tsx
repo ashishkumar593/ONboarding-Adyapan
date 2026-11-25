@@ -1,6 +1,6 @@
 "use client";
 import { useRef, useState, type PointerEvent } from "react";
-import type { Stroke } from "@/lib/signature";
+import type { Stroke } from "@shared/signature";
 
 export default function SignatureField() {
   const [mode, setMode] = useState<"draw" | "type">("draw");

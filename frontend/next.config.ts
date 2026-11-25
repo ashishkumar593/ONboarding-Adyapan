@@ -1,5 +1,9 @@
 import type { NextConfig } from "next";
+import path from "node:path";
+const repository = path.resolve(__dirname, "..");
 const config: NextConfig = {
+  turbopack: { root: repository },
+  outputFileTracingRoot: repository,
   poweredByHeader: false,
   serverExternalPackages: [
     "pg",

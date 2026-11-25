@@ -1,14 +1,14 @@
-import { exportReceived } from "@/lib/received-export";
-import { roster, importRoster, exportRoster } from "@/lib/roster";
+import { exportReceived } from "../services/received-export";
+import { roster, importRoster, exportRoster } from "../services/roster";
 import {
   verifyInvitation,
   redeemAccess,
   emailInvitation,
-} from "@/lib/access-mail";
+} from "../services/access-mail";
 import { cookies } from "next/headers";
 import { NextRequest, NextResponse } from "next/server";
 import QRCode from "qrcode";
-import { auth, hrPassword, session, setSession } from "@/lib/auth";
+import { auth, hrPassword, session, setSession } from "../services/auth";
 import {
   details,
   hash,
@@ -16,15 +16,15 @@ import {
   Problem,
   requireThat,
   transaction,
-} from "@/lib/db";
+} from "../services/db";
 import {
   createInvite,
   emailAddress,
   field,
   internAction,
   review,
-} from "@/lib/flow";
-import { get, mail } from "@/lib/private";
+} from "../services/flow";
+import { get, mail } from "../services/private";
 type Context = { params: Promise<{ action: string }> };
 const json = (body: unknown, status = 200) =>
   NextResponse.json(body, { status, headers: { "Cache-Control": "no-store" } });
