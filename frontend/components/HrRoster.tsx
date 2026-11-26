@@ -43,7 +43,7 @@ export default function HrRoster({
   const [importing,setImporting] = useState(false);
   const [progress,setProgress] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const canRemove = group === "awaiting" && permissions.includes("invite");
+  const canRemove = permissions.includes("invite");
   const received = rows.filter(r=>rosterGroup(r)==="received");
   const years = [...new Set(received.map(r => receivedDay(r.received_at).slice(0, 4)).filter(Boolean))].sort().reverse();
   const filterQuery = new URLSearchParams({ year, month, search: search.trim() });

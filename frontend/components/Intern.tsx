@@ -253,7 +253,14 @@ export default function Intern({ token }: { token: string }) {
           ) : (
             <p>{summary.status === "issued" ? "Contact HR for a copy of your stamped offer letter." : "Contact HR for help with your saved details and documents."}</p>
           )}
-          <button className="secondary" disabled={busy} onClick={() => run(() => load())}>Refresh status</button>
+          <button
+            className="secondary"
+            style={summary.status === "issued" && summary.issued_file ? { marginLeft: "0.75rem", marginTop: "0.5rem" } : undefined}
+            disabled={busy}
+            onClick={() => run(() => load())}
+          >
+            Refresh status
+          </button>
         </section>
       ) : !inv ? (
         <section className="panel verify">

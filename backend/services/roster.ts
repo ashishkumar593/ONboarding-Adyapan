@@ -32,8 +32,8 @@ export async function removeFromRoster(ids: string[], user: StaffSession) {
        WHERE i.id=ANY($1::uuid[]) ORDER BY i.id FOR UPDATE OF i,a`, [ids, user.staff],
     );
     requireThat(rows.length === ids.length, "One or more roster records are unavailable.", 404);
-    requireThat(rows.every(row => !row.reference && ["queued", "invited", "draft", "removed"].includes(row.status)),
-      "An intern has already submitted documents. Refresh the roster and review your selection.", 409);
+    requireThat(rows.every(row => ["queued", "invited", "draft", "submitted", "correction", "issued", "removed"].includes(row.status)),
+      "One or more roster records cannot be removed.", 409);
     const active = rows.filter(row => row.status !== "removed").map(row => row.id);
     if (active.length) {
       await db.query("UPDATE invitations SET status='removed', access_revoked_at=now() WHERE id=ANY($1::uuid[])", [active]);
