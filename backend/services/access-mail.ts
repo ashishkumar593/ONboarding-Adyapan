@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import type { PoolClient } from "pg";
-import { hash, pool, requireThat, transaction } from "./db";
+import { demo, hash, requireThat, transaction } from "./db";
 import { mail } from "./private";
 
 type Recipient = {
@@ -57,7 +57,7 @@ export async function rememberedDevice(db: Pick<PoolClient, "query">, key?: stri
   return (await db.query<{ invitation: string; email: string; expires: Date; verified_at: Date | null }>(
     `SELECT s.invitation,i.email,s.expires,s.verified_at FROM sessions s JOIN invitations i ON i.id=s.invitation
      WHERE s.digest=$1 AND s.method='remember-browser' AND s.expires>now()
-       AND i.access_revoked_at IS NULL AND i.status <> 'removed'`, [hash("device:" + key)],
+       AND i.intern_access_expires_at>now() AND i.access_revoked_at IS NULL AND i.status <> 'removed'`, [hash("device:" + key)],
   )).rows[0];
 }
 
@@ -72,7 +72,15 @@ async function addDevice(db: PoolClient, id: string, expires: Date, verified: bo
 }
 
 async function startInternSession(db: PoolClient, id: string, verified: boolean, key?: string, deadline?: Date) {
-  const expires = deadline ?? new Date(Date.now() + 30 * 86400_000);
+  const window = await db.query<{ expires: Date }>(
+    `UPDATE invitations SET intern_access_expires_at=COALESCE(intern_access_expires_at,now()+interval '720 hours')
+     WHERE id=$1 AND access_revoked_at IS NULL AND status <> 'removed'
+       AND (intern_access_expires_at IS NULL OR intern_access_expires_at>now())
+     RETURNING intern_access_expires_at AS expires`, [id],
+  );
+  requireThat(window.rowCount, "Your 30-day onboarding access has ended. Contact HR.", 403);
+  const accountExpiry = window.rows[0].expires;
+  const expires = deadline && deadline < accountExpiry ? deadline : accountExpiry;
   const device = key ?? await addDevice(db, id, expires, verified);
   const token = crypto.randomBytes(32).toString("hex");
   await db.query(
@@ -95,10 +103,11 @@ export async function rememberBrowser(id: string, sessionToken: string, previous
   });
 }
 
-export async function verifyRosterEmail(email: string, device?: string) {
+export async function verifyRosterEmail(email: string, device: string | undefined, requestRecovery: boolean) {
   return transaction(async db => {
     const recipient = (await db.query(
-      `SELECT *,status IN ('queued','invited') AND draft='{}'::jsonb AND reference IS NULL
+      `SELECT *,intern_access_expires_at<=now() AS access_expired,
+          intern_access_expires_at IS NULL AND status IN ('queued','invited','draft') AND draft='{}'::jsonb AND reference IS NULL
           AND NOT EXISTS(SELECT 1 FROM files WHERE invitation=i.id)
           AND NOT EXISTS(SELECT 1 FROM sessions WHERE invitation=i.id AND expires>now()) AS first_claim,
           last_access_request_at>now()-interval '1 minute' AND EXISTS(
@@ -107,6 +116,7 @@ export async function verifyRosterEmail(email: string, device?: string) {
        ORDER BY starts DESC,created_at DESC,id DESC LIMIT 1 FOR UPDATE`,
       [email])).rows[0];
     requireThat(recipient && !recipient.access_revoked_at,"Check the email address or contact HR to join the roster.",401);
+    requireThat(!recipient.access_expired, "Your 30-day onboarding access has ended. Contact HR.", 403);
     const remembered = await rememberedDevice(db, device);
     if (remembered && remembered.invitation === recipient.id)
       return startInternSession(db, recipient.id, !!remembered.verified_at, device, remembered.expires);
@@ -114,11 +124,13 @@ export async function verifyRosterEmail(email: string, device?: string) {
       await db.query("UPDATE invitations SET status='draft',qr_expires_at=NULL WHERE id=$1",[recipient.id]);
       return startInternSession(db, recipient.id, false);
     }
+    const canEmail = !!process.env.SMTP_URL || demo();
+    if (!requestRecovery || !canEmail) return { useOriginalBrowser: true, canEmail };
     if (!recipient.recently_mailed) {
       await sendAccessMail(db,recipient,"return");
       await db.query("UPDATE invitations SET last_access_request_at=now() WHERE id=$1",[recipient.id]);
     }
-    return null;
+    return { emailSent: true };
   });
 }
 

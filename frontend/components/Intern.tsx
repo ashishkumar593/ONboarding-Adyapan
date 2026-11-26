@@ -27,6 +27,7 @@ export default function Intern({ token }: { token: string }) {
   const [inv, setInv] = useState<Invitation | null>(null),
     [ready, setReady] = useState(false),
     [emailSent, setEmailSent] = useState(false),
+    [returnAccess, setReturnAccess] = useState<{ canEmail: boolean } | null>(null),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false);
   const [email, setEmail] = useState(""),
@@ -91,9 +92,11 @@ export default function Intern({ token }: { token: string }) {
       setBusy(false);
     }
   }
-  async function verifyEmail() {
+  async function verifyEmail(recover = false) {
     setEmailSent(false);
-    const result = await request("roster-login", form({ email }));
+    setReturnAccess(null);
+    const result = await request("roster-login", form({ email, recover: recover ? "yes" : "no" }));
+    if (result.useOriginalBrowser) { setReturnAccess(result); return; }
     if (result.emailSent) { setEmailSent(true); return; }
     await load(true);
   }
@@ -244,7 +247,7 @@ export default function Intern({ token }: { token: string }) {
           ) : (
             <>
               {emailSent && <p className="notice" role="status">Check your invited inbox for a fresh personal link.</p>}
-              <p>This browser remembers your registered email for 30 days from sign-in. You can sign out and return during that time. On a new browser or after 30 days, confirm your email to reopen your application.</p>
+              <p>Enter the email HR added to the intern roster. Your access lasts 30 days from your first sign-in, including when you change browsers.</p>
               <form
                 onSubmit={(e) => {
                   e.preventDefault();
@@ -258,14 +261,29 @@ export default function Intern({ token }: { token: string }) {
                     autoComplete="email"
                     type="email"
                     name="email"
+                    disabled={busy}
                     value={email}
-                    onChange={(e) => setEmail(e.target.value)}
+                    onChange={(e) => {
+                      setEmail(e.target.value);
+                      setEmailSent(false);
+                      setReturnAccess(null);
+                    }}
                   />
                 </label>
                 <button className="button" disabled={busy}>
                   {busy ? "Checking…" : "Continue"}
                 </button>
               </form>
+              {returnAccess && (
+                <div className="notice" role="status">
+                  <p>Your email is on the roster. This browser needs confirmation before it can open your saved documents.</p>
+                  {returnAccess.canEmail ? (
+                    <button type="button" className="secondary" disabled={busy} onClick={() => run(() => verifyEmail(true))}>
+                      Email me a recovery link
+                    </button>
+                  ) : <p>Email confirmation is unavailable. You can use a browser you already signed in on during your 30-day access period.</p>}
+                </div>
+              )}
             </>
 
           )}
@@ -566,6 +584,7 @@ export default function Intern({ token }: { token: string }) {
                 setAccess("");
                 setStep(0);
                 setEmailSent(false);
+                setReturnAccess(null);
               })
             }
           >

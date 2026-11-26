@@ -50,3 +50,16 @@ CREATE TABLE IF NOT EXISTS hr_access_events (
  invitation uuid, file_id uuid, detail jsonb NOT NULL DEFAULT '{}', created_at timestamptz NOT NULL DEFAULT now()
 );
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS method text;
+ALTER TABLE invitations ADD COLUMN IF NOT EXISTS intern_access_expires_at timestamptz;
+-- Older versions kept the 30-day deadline on remembered-browser grants.
+-- When no grant remains, use the earliest recorded intern activity.
+UPDATE invitations i SET intern_access_expires_at = COALESCE(
+  LEAST(
+    (SELECT min(expires) FROM sessions WHERE invitation=i.id AND method='remember-browser'),
+    (SELECT min(created_at) + interval '720 hours' FROM files WHERE invitation=i.id AND slot NOT IN ('original','issued')),
+    (SELECT min(created_at) + interval '720 hours' FROM submissions WHERE invitation=i.id)
+  ), i.created_at + interval '720 hours'
+) WHERE intern_access_expires_at IS NULL AND (
+  status IN ('draft','submitted','correction','issued')
+  OR EXISTS (SELECT 1 FROM sessions WHERE invitation=i.id AND NOT hr)
+);

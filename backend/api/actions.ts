@@ -220,9 +220,9 @@ export async function POST(req: NextRequest, ctx: Context) {
     }).formData();
     if (action === "roster-login") {
       const device = (await cookies()).get("ady_device")?.value;
-      const session = await verifyRosterEmail(emailAddress(data), device);
-      if (!session) return json({ emailSent: true });
-      await setInternCookies(session);
+      const result = await verifyRosterEmail(emailAddress(data), device, data.get("recover") === "yes");
+      if (!("token" in result)) return json(result);
+      await setInternCookies(result);
       return json({ ok: true });
     }
     if (action === "redeem-link") {

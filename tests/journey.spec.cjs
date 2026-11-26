@@ -282,7 +282,8 @@ test("HR invitation, phone onboarding, correction and idempotent PDF issuance", 
   await expect(phone.getByLabel("Registered email address")).toHaveValue("");
   await phone.getByLabel("Registered email address").fill(email);
   await phone.getByRole("button", { name: "Continue", exact: true }).click();
-  await expect(phone.getByText("Check your invited inbox for a fresh personal link.")).toBeVisible();
+  await expect(phone.getByText(/Your email is on the roster/)).toBeVisible();
+  expect((await messages()).length).toBe(initialMailCount);
   expect((await phone.request.get("/api/application")).status()).toBe(401);
   await first.close();
   const second = await browser.newContext({
@@ -305,9 +306,14 @@ test("HR invitation, phone onboarding, correction and idempotent PDF issuance", 
   }
   await intern.getByLabel("Registered email address").fill(email.toUpperCase());
   await intern.getByRole("button", { name: "Continue", exact: true }).click();
+  await expect(intern.getByText(/Your email is on the roster/)).toBeVisible();
+  expect((await messages()).length).toBe(numberOfMessages);
+  await intern.getByRole("button", { name: "Email me a recovery link" }).click();
   await expect(intern.getByText("Check your invited inbox for a fresh personal link.")).toBeVisible();
   expect((await intern.request.get("/api/application")).status()).toBe(401);
   await openFromInbox(intern,"Your personal onboarding link","Your documents");
+  const newDevice = (await second.cookies()).find(cookie => cookie.name === "ady_device");
+  expect(Math.abs(newDevice.expires - deadline.getTime() / 1000)).toBeLessThan(2);
   await expect(intern.getByRole("heading", { name: "Your documents" })).toBeVisible();
   await expect(
     intern.getByRole("button", { name: "Continue to terms" }),
@@ -562,6 +568,10 @@ test("HR invitation, phone onboarding, correction and idempotent PDF issuance", 
       (m) => m.to === email && m.subject.includes("letter is ready"),
     ),
   ).toHaveLength(1);
+  await db.query("UPDATE invitations SET intern_access_expires_at=now()-interval '1 second' WHERE id=$1", [inviteId]);
+  expect((await intern.request.get("/api/application")).status()).toBe(401);
+  expect((await intern.request.get(href)).status()).toBe(401);
+  expect(await (await intern.request.get("/api/remembered-email")).json()).toEqual({email:""});
   await second.close();
 });
 test("welcome fits phone and desktop, and help and stage details open", async ({
@@ -832,8 +842,10 @@ test("named HR credentials, assignments, freshness and intern revocation", async
     expect((await intern.get("/api/application")).status()).toBe(401);
     expect((await post(intern,"roster-login",{email:"scope@example.test"})).status()).toBe(401);
     expect((await post(hr,"restore",{id})).ok()).toBeTruthy();
-    expect(await (await post(intern,"roster-login",{email:"scope@example.test"})).json()).toEqual({emailSent:true});
+    expect(await (await post(intern,"roster-login",{email:"scope@example.test"})).json()).toEqual({useOriginalBrowser:true,canEmail:true});
     expect((await intern.get("/api/application")).status()).toBe(401);
+    await db.query("UPDATE invitations SET intern_access_expires_at=now()-interval '1 second' WHERE id=$1",[id]);
+    expect((await post(intern,"roster-login",{email:"scope@example.test",recover:"yes"})).status()).toBe(403);
     await db.query("UPDATE sessions SET verified_at=now()-interval '11 minutes' WHERE staff=$1",[hrEmail]);
     expect((await hr.get("/api/received-export")).status()).toBe(428);
     expect((await post(hr,"issue",{id})).status()).toBe(428);
