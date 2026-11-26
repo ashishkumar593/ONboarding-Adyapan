@@ -9,12 +9,13 @@ import {
   Upload,
   UserRound,
 } from "lucide-react";
-import { form, request, RequestError, fileUrl, sendFile } from "./client";
+import { decodeFile, form, request, RequestError, fileUrl, sendFile } from "./client";
 import IssuedOffer from "./IssuedOffer";
 import SignatureField from "./SignatureField";
 import { validDrawing } from "@shared/signature";
 import {
   termsAcknowledgement,
+  signedPolicySlot,
   profileValues,
   profileComplete,
   isResume,
@@ -43,7 +44,8 @@ export default function Intern({ token }: { token: string }) {
       const correction = result.requirements.find(
         (r) => r.id === result.correction?.slot,
       );
-      if (correction) setStep(isResume(correction) ? 0 : 1);
+      if (result.policies.some(p => signedPolicySlot(p).id === result.correction?.slot)) setStep(2);
+      else if (correction) setStep(isResume(correction) ? 0 : 1);
       else if (!profileComplete(result)) setStep(0);
       else
         setStep(
@@ -100,6 +102,15 @@ export default function Intern({ token }: { token: string }) {
     if (result.emailSent) { setEmailSent(true); return; }
     await load(true);
   }
+  async function downloadPolicy(file: string) {
+    const { content } = await request("signing-policy?format=json&file=" + encodeURIComponent(file));
+    const url = URL.createObjectURL(new Blob([decodeFile(content)], { type: "application/pdf" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = file;
+    link.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  }
   async function openInvitation() {
     let invalidLink: RequestError | undefined;
     try {
@@ -125,12 +136,14 @@ export default function Intern({ token }: { token: string }) {
   const done = inv && ["submitted", "issued"].includes(inv.status);
   const stages = ["Your details", "Documents", "Terms & signature"];
   const resume = inv?.requirements.find(isResume);
+  const policySlots = inv?.policies.map(signedPolicySlot) ?? [];
+  const policyCorrection = policySlots.find(slot => slot.id === inv?.correction?.slot);
   const hasResume = inv?.files.some((f) => f.slot === resume?.id);
   const allFiles = inv?.requirements.every((r) =>
     inv.files.some((f) => f.slot === r.id),
   );
   const corrected =
-    !inv?.correction ||
+    !inv?.correction || !!policyCorrection ||
     inv.files.find((f) => f.slot === inv.correction!.slot)?.id !==
       inv.correction.previous;
   function renderUpload(slot: Slot) {
@@ -341,8 +354,7 @@ export default function Intern({ token }: { token: string }) {
               <strong>
                 Correction requested ·{" "}
                 {
-                  inv.requirements.find((r) => r.id === inv.correction?.slot)
-                    ?.label
+                  policyCorrection?.label ?? inv.requirements.find((r) => r.id === inv.correction?.slot)?.label
                 }
               </strong>
               <p>{inv.correction.message}</p>
@@ -361,7 +373,7 @@ export default function Intern({ token }: { token: string }) {
                     !!inv.correction &&
                     inv.correction.slot === resume?.id) ||
                   (i > 0 && !inv.reference && !profileComplete(inv)) ||
-                  (i === 2 && (!allFiles || !corrected)) ||
+                  (i === 2 && (!allFiles || (!corrected && !policyCorrection))) ||
                   (step === 0 && i > 0 && !inv.correction)
                 }
                 aria-current={step === i ? "step" : undefined}
@@ -502,17 +514,23 @@ export default function Intern({ token }: { token: string }) {
                 })}
               </details>
               <h3>Terms and conditions</h3>
+              <p>Review both agreements, then sign once below. When you submit, your signature is added to both PDFs for HR to review.</p>
               {inv.terms && <p className="onboarding-terms">{inv.terms}</p>}
               {inv.policies.map(policy => (
                 <section key={policy.sha256} className="signing-policy">
                   <h4>{policy.title}</h4>
                   {policy.introduction && <p className="onboarding-terms">{policy.introduction}</p>}
                   <ol>{policy.clauses.map(clause => <li key={clause}>{clause}</li>)}</ol>
-                  <a href={`/api/signing-policy?file=${encodeURIComponent(policy.file)}`}
-                    target="_blank" rel="noreferrer"
-                    aria-label={`Open original PDF for ${policy.title} (opens in a new tab)`}>
-                    Open original PDF
-                  </a>
+                  <div className="row">
+                    <a href={`/api/signing-policy?file=${encodeURIComponent(policy.file)}`}
+                      target="_blank" rel="noreferrer"
+                      aria-label={`Open original PDF for ${policy.title} (opens in a new tab)`}>
+                      Open original PDF
+                    </a>
+                    <button type="button" className="secondary" disabled={busy}
+                      onClick={() => run(() => downloadPolicy(policy.file))}
+                      aria-label={`Download PDF for ${policy.title}`}>Download PDF</button>
+                  </div>
                 </section>
               ))}
               <small>Terms version {inv.version}</small>
@@ -543,7 +561,7 @@ export default function Intern({ token }: { token: string }) {
                   {termsAcknowledgement}
                 </label>
                 <SignatureField />
-                <button className="button" disabled={busy}>
+                <button className="button" disabled={busy || !corrected}>
                   {busy ? "Submitting…" : "Sign and submit"}
                 </button>
               </form>

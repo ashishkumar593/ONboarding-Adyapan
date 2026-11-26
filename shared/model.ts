@@ -8,6 +8,9 @@ export type SigningPolicy = {
   clauses: string[];
 };
 export type Slot = { id: string; label: string };
+export function signedPolicySlot(policy: SigningPolicy): Slot {
+  return { id: "policy-" + policy.sha256, label: "Signed copy of " + policy.title };
+}
 export type Doc = {
   pending?: boolean;
   id: string;

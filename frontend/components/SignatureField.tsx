@@ -19,7 +19,7 @@ export default function SignatureField() {
   }
   return (
     <fieldset className="signature-field">
-      <legend>Electronic signature</legend>
+      <legend>Signature method</legend>
       <div className="signature-options">
         <label className="check">
           <input

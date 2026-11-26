@@ -82,7 +82,9 @@ export async function GET(req: NextRequest, ctx: Context) {
       await auth();
       const policy = signingPolicies.find(item => item.file === q.get("file"));
       requireThat(policy, "Policy unavailable.", 404);
-      return new Response(new Uint8Array(await readPolicyPdf(policy)), {
+      const bytes = await readPolicyPdf(policy);
+      if (q.get("format") === "json") return json({ content: bytes.toString("base64") });
+      return new Response(new Uint8Array(bytes), {
         headers: {
           "Content-Type": "application/pdf",
           "Content-Disposition": `inline; filename="${policy.file}"`,

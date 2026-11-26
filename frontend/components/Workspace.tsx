@@ -8,6 +8,7 @@ import {
 import { request, fileUrl, form, RequestError } from "./client";
 import {
   standardDocuments,
+  signedPolicySlot,
   rosterGroup,
   type RosterRow,
   profileValues,
@@ -83,6 +84,8 @@ export default function Workspace() {
 
   const signedOffer = inv?.files.find(f => f.slot === "signed");
   const received = inv && rosterGroup(inv) === "received";
+  const reviewDocuments = inv ? [...inv.requirements, ...inv.policies.map(signedPolicySlot)
+    .filter(slot => inv.files.some(file => file.slot === slot.id))] : [];
   return (
     <main className={rows ? "shell hr-main" : "narrow"}>
       <div className="crumb">
@@ -285,7 +288,7 @@ export default function Workspace() {
                       </>
                     ) : <small>Awaiting upload</small>}
                   </div>
-                  {inv.requirements
+                  {reviewDocuments
                     .filter((r) => permissions.includes("review") && r.id !== "signed")
                     .map((r) => {
                       const f = inv.files.find((f) => f.slot === r.id);
@@ -321,7 +324,7 @@ export default function Workspace() {
                         <label>
                           Document
                           <select aria-label="Document" name="slot">
-                            {inv.requirements.map((r) => (
+                            {reviewDocuments.map((r) => (
                               <option key={r.id} value={r.id}>
                                 {r.label}
                               </option>

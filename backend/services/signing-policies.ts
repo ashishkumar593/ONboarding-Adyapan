@@ -1,8 +1,13 @@
 import "server-only";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { createRequire } from "node:module";
 import { createHash } from "node:crypto";
 import type { SigningPolicy } from "@shared/model";
+import type { Stroke } from "@shared/signature";
+import sharp from "sharp";
+import { BlendMode, PDFDocument } from "pdf-lib";
+import type { HrStamp } from "./hr-stamp";
 
 export const signingPolicies: SigningPolicy[] = [
   {
@@ -43,4 +48,41 @@ export async function readPolicyPdf(policy: SigningPolicy) {
   if (createHash("sha256").update(bytes).digest("hex") !== policy.sha256)
     throw new Error("Policy PDF differs from its signed version.");
   return bytes;
+}
+
+export async function signatureImage(name: string, drawing: Stroke[] | null) {
+  if (drawing) {
+    const lines = drawing.map(stroke => '<polyline points="' + stroke.map(point => point.join(",")).join(" ") + '"/>').join("");
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="1010" height="310" viewBox="-5 -5 1010 310"><g fill="none" stroke="#152436" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">' + lines + '</g></svg>';
+    return sharp(Buffer.from(svg)).trim({ threshold: 1 }).png().toBuffer();
+  }
+  const text = name.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const resolveFont = createRequire(path.join(process.cwd(), "package.json")).resolve;
+  const fontfile = resolveFont("pdfjs-dist/standard_fonts/LiberationSans-Italic.ttf");
+  return sharp({ text: { text, rgba: true, font: "Liberation Sans Italic 48", fontfile } }).png().toBuffer();
+}
+
+// Label centers and the bottom of the visible marks, in original PDF coordinates.
+const signingPositions: Record<string, { employee: number; authority: number; bottom: number }> = {
+  "confidentiality-47a5ba1f.pdf": { employee: 80.5, authority: 498, bottom: 99 },
+  "liquidated-damages-32913b97.pdf": { employee: 66, authority: 519, bottom: 83 },
+};
+
+export async function signPolicyPdf(policy: SigningPolicy, signature: Buffer, hrStamp: HrStamp) {
+  const position = signingPositions[policy.file];
+  if (!position) throw new Error("Missing signature positions for this agreement.");
+  const pdf = await PDFDocument.load(await readPolicyPdf(policy));
+  const page = pdf.getPages()[0];
+  const autograph = await pdf.embedPng(signature);
+  const size = autograph.scaleToFit(120, 36);
+  page.drawImage(autograph, { x: position.employee - size.width / 2, y: position.bottom, ...size });
+  const seal = await pdf.embedPng(hrStamp.bytes);
+  const stampSize = seal.scaleToFit(140, 66);
+  const { left, right, bottom } = hrStamp.ink;
+  page.drawImage(seal, {
+    x: position.authority - (left + right) * stampSize.width / 2,
+    y: position.bottom - bottom * stampSize.height,
+    ...stampSize, blendMode: BlendMode.Multiply,
+  });
+  return Buffer.from(await pdf.save());
 }

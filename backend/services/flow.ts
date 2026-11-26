@@ -8,12 +8,16 @@ import { sendAccessMail } from "./access-mail";
 import { countersign, requireSignedOffer } from "./issue";
 import {
   termsAcknowledgement,
+  signedPolicySlot,
   standardDocuments,
   profileComplete,
   isResume,
   type Invitation,
 } from "@shared/model";
 import { validDrawing } from "@shared/signature";
+import type { Stroke } from "@shared/signature";
+import { signatureImage, signPolicyPdf } from "./signing-policies";
+import { loadHrStamp } from "./hr-stamp";
 
 export function field(data: FormData, key: string, max = 160) {
   const value = data.get(key);
@@ -182,29 +186,31 @@ export async function internAction(id: string, action: string, data: FormData) {
         "Complete your personal details and upload your résumé.",
       );
       requireThat(
-        !inv.correction ||
+        !inv.correction || inv.policies.some(p => signedPolicySlot(p).id === inv.correction?.slot) ||
           inv.files.find((f) => f.slot === inv.correction!.slot)?.id !==
             inv.correction.previous,
         "Replace the requested file before resubmitting.",
       );
-      const mode = field(data, "signatureMode", 4);
+      const mode = field(data, "signatureMode", 6);
       requireThat(mode === "draw" || mode === "type", "Choose how to sign.");
-      let drawing: unknown = null;
+      let drawing: Stroke[] | null = null;
       if (mode === "draw") {
+        let input: unknown;
         try {
-          drawing = JSON.parse(field(data, "drawing", 120000));
+          input = JSON.parse(field(data, "drawing", 120000));
         } catch {
-          drawing = null;
+          input = null;
         }
         requireThat(
-          validDrawing(drawing),
+          validDrawing(input),
           "Draw your signature or choose Type signature.",
         );
+        drawing = input;
       }
       const signature =
         mode === "type" ? field(data, "signature") : inv.draft.name || inv.name;
       requireThat(
-        (mode === "draw" || signature.length >= 2) &&
+        (mode !== "type" || signature.length >= 2) &&
           data.get("agreed") === "yes" &&
           inv.policies.length > 0 &&
           inv.version &&
@@ -214,11 +220,21 @@ export async function internAction(id: string, action: string, data: FormData) {
       const reference =
         inv.reference ||
         "ADY-" + crypto.randomBytes(6).toString("hex").toUpperCase();
+      const image = await signatureImage(signature, drawing);
+      const stamp = await loadHrStamp();
+      const signedPolicies = [];
+      for (const policy of inv.policies) {
+        const bytes = await signPolicyPdf(policy, image, stamp);
+        const fileId = await storeFile(db, id, signedPolicySlot(policy).id, {
+          name: "signed-" + policy.file, mime: "application/pdf", data: bytes,
+        });
+        signedPolicies.push({ title: policy.title, sha256: policy.sha256, fileId });
+      }
       const snapshot = {
         name: inv.draft.name || inv.name,
         email: inv.email,
         draft: inv.draft,
-        files: docs.map((f) => f!.id),
+        files: [...docs.map((f) => f!.id), ...signedPolicies.map(p => p.fileId)],
         terms: [
           inv.terms,
           ...inv.policies.map(policy => [
@@ -227,6 +243,7 @@ export async function internAction(id: string, action: string, data: FormData) {
           ].filter(Boolean).join("\n\n")),
         ].filter(Boolean).join("\n\n"),
         policies: inv.policies.map(({ title, file, sha256 }) => ({ title, file, sha256 })),
+        signedPolicies,
         version: inv.version,
         signature,
         agreed: true,
@@ -269,7 +286,7 @@ export async function review(id: string, action: string, data: FormData, staff: 
         message = field(data, "message", 800),
         doc = inv.files.find((f) => f.slot === slot);
       requireThat(
-        doc && inv.requirements.some((r) => r.id === slot),
+        doc && (inv.requirements.some((r) => r.id === slot) || inv.policies.some(p => signedPolicySlot(p).id === slot)),
         "Select a submitted document.",
       );
       const correction = { slot, message, previous: doc.id };

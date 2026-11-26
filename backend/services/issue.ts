@@ -1,31 +1,11 @@
-import { readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { BlendMode, PDFDocument, concatTransformationMatrix, popGraphicsState, pushGraphicsState, rgb } from "pdf-lib";
-import UPNG from "@pdf-lib/upng";
 import { Problem, requireThat } from "./db";
-import { hasCloudinary, readObject } from "./private";
+import { loadHrStamp, type HrStamp } from "./hr-stamp";
 import type { Invitation } from "@shared/model";
 import { getDocument, Util } from "pdfjs-dist/legacy/build/pdf.mjs";
 
-function stampInkBounds(bytes: Uint8Array) {
-  const image = UPNG.decode(Uint8Array.from(bytes).buffer);
-  const pixels = new Uint8Array(UPNG.toRGBA8(image)[0]);
-  let left = image.width, right = 0, top = image.height, bottom = 0;
-  for (let i = 0; i < pixels.length; i += 4) {
-    const darkness = 255 - Math.min(pixels[i], pixels[i + 1], pixels[i + 2]);
-    if (darkness * pixels[i + 3] / 255 < 64) continue;
-    const x = (i / 4) % image.width, y = Math.floor(i / 4 / image.width);
-    left = Math.min(left, x);
-    right = Math.max(right, x + 1);
-    top = Math.min(top, y);
-    bottom = Math.max(bottom, y + 1);
-  }
-  if (!right) return { left: 0, right: 1, bottom: 0, top: 1 };
-  return { left: left / image.width, right: right / image.width,
-    bottom: 1 - bottom / image.height, top: 1 - top / image.height };
-}
-
-async function findHrSignatureSpace(source: Buffer, size: { width: number; height: number }, ink: ReturnType<typeof stampInkBounds>) {
+async function findHrSignatureSpace(source: Buffer, size: { width: number; height: number }, ink: HrStamp["ink"]) {
   try {
     const task = getDocument({ data: new Uint8Array(source), useSystemFonts: false });
     try {
@@ -106,19 +86,9 @@ export async function countersign(source: Buffer, inv: Invitation) {
     );
     return bytes;
   }
-  const encodedStamp = process.env.HR_STAMP_BASE64?.trim();
-  const stampPath = process.env.HR_STAMP_PATH;
-  const useCloudinaryStamp = !encodedStamp && !stampPath && hasCloudinary();
-  requireThat(encodedStamp || stampPath || useCloudinaryStamp, "Configure HR_STAMP_BASE64 with the approved HR stamp PNG, or configure the signing service.", 503);
   const pdf = await PDFDocument.load(source);
-  const stampBytes = encodedStamp
-    ? Promise.resolve(Buffer.from(encodedStamp, "base64"))
-    : stampPath
-      ? readFile(/* turbopackIgnore: true */ stampPath)
-      : readObject(process.env.HR_STAMP_CLOUDINARY_ID || "hr-manager-stamp");
-  const { stamp, ink } = await stampBytes
-    .then(async bytes => ({ stamp: await pdf.embedPng(bytes), ink: stampInkBounds(bytes) }))
-    .catch(() => { throw new Problem("The HR manager stamp could not be loaded. Check the configured PNG and retry.", 503); });
+  const { bytes, ink } = await loadHrStamp();
+  const stamp = await pdf.embedPng(bytes);
 
   const page = pdf.getPages().at(-1);
   requireThat(page, "The submitted offer has no pages.");

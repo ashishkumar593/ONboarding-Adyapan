@@ -374,11 +374,32 @@ test("HR invitation, phone onboarding, correction and idempotent PDF issuance", 
       signatureMode: "type", signature: "Aarya Test", agreed: "yes" },
   });
   expect(stale.status()).toBe(400);
+  if (!useStampSecret) {
+    const missingStamp = await intern.request.post("/api/submit", {
+      headers: { Origin: origin },
+      multipart: { invitation: inviteId, revision: agreement.revision, version: agreement.version,
+        signatureMode: "type", signature: "Aarya Test", agreed: "yes" },
+    });
+    expect(missingStamp.status()).toBe(503);
+    expect((await db.query("SELECT 1 FROM files WHERE invitation=$1 AND slot LIKE 'policy-%'", [inviteId])).rowCount).toBe(0);
+    await fs.writeFile(path.join(dir, "test-stamp.png"), PNG.sync.write(stamp));
+  }
+  await expect(intern.locator('input[type="file"]')).toHaveCount(0);
+  for (const [index, policy] of agreement.policies.entries()) {
+    const section = policies.nth(index);
+    const [download] = await Promise.all([
+      intern.waitForEvent("download"),
+      section.getByRole("button", {name: /Download PDF for/}).click(),
+    ]);
+    expect(download.suggestedFilename()).toBe(policy.file);
+    const original = await fs.readFile(await download.path());
+    expect(crypto.createHash("sha256").update(original).digest("hex")).toBe(policy.sha256);
+  }
   async function sign(typed = false) {
     await acknowledgement.check();
     if (typed) {
       await intern.getByLabel("Type signature", { exact: true }).check();
-      await intern.getByLabel("Signature · full name").fill("Aarya Test");
+      await intern.getByLabel(/Signature.*full name/).fill("Aarya Test");
     } else {
       await intern.getByRole("button", { name: "Sign and submit" }).click();
       await expect(
@@ -404,7 +425,9 @@ test("HR invitation, phone onboarding, correction and idempotent PDF issuance", 
     ])
   ).rows[0].snapshot;
   expect(firstSubmission.draft.employeeId).toBe("ADY-IN-007");
-  expect(firstSubmission.files).toHaveLength(7);
+  expect(firstSubmission.files).toHaveLength(9);
+  expect(firstSubmission.signedPolicies.map(p => p.sha256)).toEqual(agreement.policies.map(p => p.sha256));
+  for (const policy of firstSubmission.signedPolicies) expect(firstSubmission.files).toContain(policy.fileId);
   expect(firstSubmission.signatureMode).toBe("draw");
   expect(firstSubmission.terms).toBe(displayedTerms.join("\n\n"));
   expect(firstSubmission.version).toBe(agreement.version);
@@ -428,10 +451,29 @@ test("HR invitation, phone onboarding, correction and idempotent PDF issuance", 
     receipt.reference,
   );
   expect(receivedBook.worksheets[0].getCell("K2").value).toBe("Sample University");
-  const documentRows = receivedBook.getWorksheet("Uploaded documents").getRows(2, 7);
+  const documentRows = receivedBook.getWorksheet("Uploaded documents").getRows(2, 9);
   for (const row of documentRows) {
     const entry = bundle.file(row.getCell(4).value.hyperlink);
-    expect((await entry.async("nodebuffer")).equals(sample.buffer)).toBe(true);
+    const bytes = await entry.async("nodebuffer");
+    const policy = firstSubmission.signedPolicies.find(p => p.fileId === row.getCell(8).value);
+    if (policy) {
+      const signed = await PDFDocument.load(bytes);
+      const page = signed.getPages()[0];
+      const employee = policy.sha256 === agreement.policies[0].sha256 ? 80.5 : 66;
+      const authority = employee === 80.5 ? 498 : 519;
+      const bottom = employee === 80.5 ? 99 : 83;
+      const ops = Buffer.from(decodePDFRawStream(signed.context.lookup(page.node.Contents().asArray().at(-1))).decode()).toString();
+      const placements = [...ops.matchAll(/1 0 0 1 ([\d.-]+) ([\d.-]+) cm\s+1 0 0 1 0 0 cm\s+([\d.-]+) 0 0 ([\d.-]+) 0 0 cm\s+1 0 0 1 0 0 cm\s+\/(Image-\d+) Do/g)];
+      expect(placements).toHaveLength(2);
+      const [signature, seal] = placements.map(m => m.slice(1, 5).map(Number));
+      expect(signature[0] + signature[2] / 2).toBeCloseTo(employee);
+      expect(signature[1]).toBeCloseTo(bottom);
+      expect(seal[0] + seal[2] / 2).toBeCloseTo(authority);
+      expect(seal[1] + seal[3] * 3 / stamp.height).toBeCloseTo(bottom);
+      const sealObject = page.node.Resources().lookup(PDFName.of("XObject")).lookup(PDFName.of(placements[1][5]));
+      expect(sealObject.dict.get(PDFName.of("Width")).asNumber()).toBe(stamp.width);
+      expect(crypto.createHash("sha256").update(bytes).digest("hex")).not.toBe(policy.sha256);
+    } else expect(bytes.equals(sample.buffer)).toBe(true);
   }
   const declaration = receivedBook.getWorksheet("Signed declarations").getRow(2);
   expect(await bundle.file(declaration.getCell(10).value.hyperlink).async("string")).toContain("<polyline");
@@ -444,6 +486,11 @@ test("HR invitation, phone onboarding, correction and idempotent PDF issuance", 
   expect((await again.json()).reference).toBe(receipt.reference);
   await hr.getByRole("button", { name: /Aarya Test/ }).click();
   await expect(hr.locator(".qr-card")).toHaveCount(0);
+  for (const policy of agreement.policies) {
+    const signedLink = hr.getByRole("link", {name:"signed-" + policy.file, exact:true});
+    await expect(signedLink).toBeVisible();
+    expect((await hr.request.get(await signedLink.getAttribute("href"))).status()).toBe(200);
+  }
   await hr.getByRole("combobox").selectOption({ label: "Aadhaar card" });
   await hr
     .getByLabel("What needs to change?")
@@ -459,6 +506,7 @@ test("HR invitation, phone onboarding, correction and idempotent PDF issuance", 
     .setInputFiles({ ...sample, name: "identity-complete.pdf" });
   await intern.getByRole("button", { name: "Continue to terms" }).click();
   await sign(true);
+  expect((await db.query("SELECT snapshot->>'signatureMode' AS mode FROM submissions WHERE invitation=$1 ORDER BY created_at DESC LIMIT 1", [inviteId])).rows[0].mode).toBe("type");
   await hr.getByRole("button", { name: "Back to documents received" }).click();
   await hr.getByRole("button", { name: /Aarya Test/ }).click();
   const accepted = await (
@@ -480,6 +528,7 @@ test("HR invitation, phone onboarding, correction and idempotent PDF issuance", 
   ).toBe("submitted");
   await fs.rename(object + ".offline", object);
   if (!useStampSecret) {
+    await fs.unlink(path.join(dir, "test-stamp.png"));
     await hr.getByRole("button", { name: "Countersign and issue" }).click();
     await expect(hr.getByRole("alert").filter({ hasText: "stamp could not be loaded" })).toBeVisible();
     await fs.writeFile(path.join(dir, "test-stamp.png"), PNG.sync.write(stamp));

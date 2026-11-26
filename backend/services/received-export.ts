@@ -1,7 +1,8 @@
 import ExcelJS from "exceljs";
 import type { ReceivedExport } from "@shared/received-export";
 import { pool } from "./db";
-import { statuses, type Invitation, type Doc } from "@shared/model";
+import { signedPolicySlot, statuses, type Invitation, type Doc } from "@shared/model";
+import { signingPolicies } from "./signing-policies";
 import { validDrawing } from "@shared/signature";
 
 type ReceivedRecord = Pick<Invitation,
@@ -97,6 +98,7 @@ export async function exportReceived(staff: string): Promise<ReceivedExport> {
     });
     for (const [index, file] of uploads.entries()) {
       const label = record.requirements.find(r => r.id === file.slot)?.label ||
+        signingPolicies.map(signedPolicySlot).find(slot => slot.id === file.slot)?.label ||
         (file.slot === "issued" ? "Issued offer" : file.slot);
       const extension = file.mime === "application/pdf" ? "pdf" : file.mime === "image/png" ? "png" : "jpg";
       const path = folder + "/" + (index + 1) + "-" + label.replace(/[^a-zA-Z0-9_-]+/g, "-").slice(0, 60) + "." + extension;
