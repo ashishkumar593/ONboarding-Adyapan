@@ -20,25 +20,32 @@ import {
   profileComplete,
   isResume,
   statusDate,
+  statuses,
   type Slot,
   type Invitation,
 } from "@shared/model";
 
+type RosterStatus = { statusOnly: true; email: string; status: string };
+
 export default function Intern({ token }: { token: string }) {
   const [inv, setInv] = useState<Invitation | null>(null),
     [ready, setReady] = useState(false),
-    [emailSent, setEmailSent] = useState(false),
-    [returnAccess, setReturnAccess] = useState<{ canEmail: boolean } | null>(null),
+    [summary, setSummary] = useState<RosterStatus | null>(null),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false);
-  const [email, setEmail] = useState(""),
-    [access, setAccess] = useState("");
+  const [email, setEmail] = useState("");
   const [step, setStep] = useState(0),
     [progress, setProgress] = useState<Record<string, number>>({});
   async function load(resume = false) {
-    const result: Invitation = await request(
+    const result: Invitation | RosterStatus = await request(
       "application" + (token ? "?token=" + encodeURIComponent(token) : ""),
     );
+    if ("statusOnly" in result) {
+      setSummary(result);
+      setInv(null);
+      return;
+    }
+    setSummary(null);
     setInv(result);
     if (resume || result.correction) {
       const correction = result.requirements.find(
@@ -58,31 +65,12 @@ export default function Intern({ token }: { token: string }) {
     }
   }
   useEffect(() => {
-    function navigate() {
-      const key = new URLSearchParams(window.location.hash.slice(1)).get(
-        "access",
-      );
-      setError("");
-      setInv(null);
-      if (key && /^[\w-]{43}$/.test(key) && token) {
-        setAccess(key);
-        setReady(true);
-        return;
-      }
-      setAccess("");
-      load(true)
-        .catch(async (e) => {
-          if (e instanceof RequestError && e.status === 401) {
-            const hint = await request("remembered-email").catch(() => null);
-            setEmail(hint?.email ?? "");
-          } else setError(e.message);
-        })
-        .finally(() => setReady(true));
-    }
-    navigate();
-    window.addEventListener("hashchange", navigate);
-    return () => window.removeEventListener("hashchange", navigate);
-  }, [token]); // invitation scopes the session
+    setInv(null);
+    setSummary(null);
+    load(true).catch(e => {
+      if (!(e instanceof RequestError && e.status === 401)) setError(e.message);
+    }).finally(() => setReady(true));
+  }, [token]);
   async function run(work: () => Promise<void>) {
     setBusy(true);
     setError("");
@@ -94,12 +82,8 @@ export default function Intern({ token }: { token: string }) {
       setBusy(false);
     }
   }
-  async function verifyEmail(recover = false) {
-    setEmailSent(false);
-    setReturnAccess(null);
-    const result = await request("roster-login", form({ email, recover: recover ? "yes" : "no" }));
-    if (result.useOriginalBrowser) { setReturnAccess(result); return; }
-    if (result.emailSent) { setEmailSent(true); return; }
+  async function verifyEmail() {
+    await request("roster-login", form({ email }));
     await load(true);
   }
   async function downloadPolicy(file: string) {
@@ -110,28 +94,6 @@ export default function Intern({ token }: { token: string }) {
     link.download = file;
     link.click();
     window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
-  }
-  async function openInvitation() {
-    let invalidLink: RequestError | undefined;
-    try {
-      await request("redeem-link", form({ token, access }));
-    } catch (e) {
-      if (!(e instanceof RequestError) || e.status !== 401) throw e;
-      invalidLink = e;
-    }
-    setAccess("");
-    window.history.replaceState(
-      null,
-      "",
-      window.location.pathname + window.location.search,
-    );
-    try {
-      await load(true);
-    } catch (e) {
-      if (invalidLink && e instanceof RequestError && e.status === 401)
-        throw invalidLink;
-      throw e;
-    }
   }
   const done = inv && ["submitted", "issued"].includes(inv.status);
   const stages = ["Your details", "Documents", "Terms & signature"];
@@ -232,74 +194,47 @@ export default function Intern({ token }: { token: string }) {
       <div className="crumb">
         <a href="/">Onboarding Portal</a>
         <i>/</i>
-        {!inv ? "Intern login" : done ? "Confirmation" : "Your application"}
+        {summary ? "Application status" : !inv ? "Intern login" : done ? "Confirmation" : "Your application"}
       </div>
       {!ready ? (
         <p role="status">Loading your application…</p>
+      ) : summary ? (
+        <section className="panel">
+          <h1>Application status</h1>
+          <p role="status">{statuses[summary.status]}</p>
+          <p>Contact HR for help with your saved details and documents.</p>
+          <button className="secondary" disabled={busy} onClick={() => run(() => load())}>Refresh status</button>
+        </section>
       ) : !inv ? (
         <section className="panel verify">
           <div className="large-icon">
             <MailCheck />
           </div>
           <div className="eyebrow">Adyapan Onboarding Portal</div>
-          <h1>{access ? "Resume onboarding" : "Intern login"}</h1>
-          {access ? (
-            <>
-              <p>
-                Continue to your internship application using the personal link
-                from your email.
-              </p>
-              <button
-                className="button"
+          <h1>Intern login</h1>
+          <p>Enter the email HR added to the roster. You can sign in from any browser for 30 days from your first sign-in.</p>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              void run(verifyEmail);
+            }}
+          >
+            <label>
+              Registered email address
+              <input
+                required
+                autoComplete="email"
+                type="email"
+                name="email"
                 disabled={busy}
-                onClick={() => run(openInvitation)}
-              >
-                {busy ? "Opening…" : "Open my application"}
-              </button>
-            </>
-          ) : (
-            <>
-              {emailSent && <p className="notice" role="status">Check your invited inbox for a fresh personal link.</p>}
-              <p>Enter the email HR added to the intern roster. Your access lasts 30 days from your first sign-in, including when you change browsers.</p>
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  void run(verifyEmail);
-                }}
-              >
-                <label>
-                  Registered email address
-                  <input
-                    required
-                    autoComplete="email"
-                    type="email"
-                    name="email"
-                    disabled={busy}
-                    value={email}
-                    onChange={(e) => {
-                      setEmail(e.target.value);
-                      setEmailSent(false);
-                      setReturnAccess(null);
-                    }}
-                  />
-                </label>
-                <button className="button" disabled={busy}>
-                  {busy ? "Checking…" : "Continue"}
-                </button>
-              </form>
-              {returnAccess && (
-                <div className="notice" role="status">
-                  <p>Your email is on the roster. This browser needs confirmation before it can open your saved documents.</p>
-                  {returnAccess.canEmail ? (
-                    <button type="button" className="secondary" disabled={busy} onClick={() => run(() => verifyEmail(true))}>
-                      Email me a recovery link
-                    </button>
-                  ) : <p>Email confirmation is unavailable. You can use a browser you already signed in on during your 30-day access period.</p>}
-                </div>
-              )}
-            </>
-
-          )}
+                value={email}
+                onChange={e => setEmail(e.target.value)}
+              />
+            </label>
+            <button className="button" disabled={busy}>
+              {busy ? "Checking…" : "Continue"}
+            </button>
+          </form>
         </section>
       ) : done ? (
         <section className="panel receipt">
@@ -397,7 +332,7 @@ export default function Intern({ token }: { token: string }) {
                   void run(async () => {
                     if (!inv.correction) {
                       const draft = await request("draft", data);
-                      setInv({ ...draft, rememberedBrowser: inv.rememberedBrowser });
+                      setInv(draft);
                     }
                     setStep(inv.correction ? 2 : 1);
                   });
@@ -574,35 +509,22 @@ export default function Intern({ token }: { token: string }) {
           {error}
         </p>
       )}
-      {inv && (
+      {(inv || summary) && (
         <div className="session">
           <span>
             <LockKeyhole size={14} />
-            {inv.email}
+            {inv?.email ?? summary?.email}
           </span>
-          <label className="check">
-            <input type="checkbox" checked={!!inv.rememberedBrowser} disabled={busy}
-              onChange={e => {
-                const remember = e.target.checked;
-                void run(async () => {
-                  const result = await request("remember-browser", form({ invitation: inv.id, remember: remember ? "yes" : "no" }));
-                  setInv(current => current && ({ ...current, rememberedBrowser: result.rememberedBrowser }));
-                });
-              }} />
-            Remember this personal browser for 30 days
-          </label>
           <button
             className="textbtn"
             disabled={busy}
             onClick={() =>
               run(async () => {
                 await request("logout", form({}));
-                setEmail(inv.rememberedBrowser ? inv.email : "");
+                setEmail("");
+                setSummary(null);
                 setInv(null);
-                setAccess("");
                 setStep(0);
-                setEmailSent(false);
-                setReturnAccess(null);
               })
             }
           >

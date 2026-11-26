@@ -10,7 +10,7 @@ export type StaffSession = {
   permissions: Permission[];
   fresh: boolean;
 };
-export async function auth(hr = false) {
+export async function auth(hr = false, allowRosterStatus = false) {
   const token = (await cookies()).get(hr ? "ady_hr" : "ady_intern")?.value;
   const row =
     token &&
@@ -21,10 +21,10 @@ export async function auth(hr = false) {
               s.verified_at > now()-interval '10 minutes' AS fresh
           FROM sessions s JOIN hr_staff h ON h.email=s.staff
           WHERE s.digest=$1 AND s.hr AND s.expires>now() AND h.enabled AND h.credential_version=s.credential_version`
-          : `SELECT s.invitation,s.hr FROM sessions s JOIN invitations i ON i.id=s.invitation
-          WHERE s.digest=$1 AND s.method IN ('invitation','mail') AND NOT s.hr AND s.expires>now()
-            AND i.intern_access_expires_at>now() AND i.access_revoked_at IS NULL`,
-        [hash(token)],
+          : `SELECT s.invitation,s.hr,s.method,i.status,i.email,i.token FROM sessions s JOIN invitations i ON i.id=s.invitation
+          WHERE s.digest=$1 AND (s.method IN ('invitation','mail') OR ($2 AND s.method='roster-status')) AND NOT s.hr AND s.expires>now()
+            AND i.intern_access_expires_at>now() AND i.access_revoked_at IS NULL AND i.status <> 'removed'`,
+        hr ? [hash(token)] : [hash(token),allowRosterStatus],
       )
     ).rows[0];
   requireThat(
@@ -131,7 +131,7 @@ export async function login(email: string, password: string, key: string) {
   requireThat(token, "Check your sign-in details.", 401);
   return token;
 }
-export async function setLoginCookie(name: "ady_hr" | "ady_intern" | "ady_device", value: string, expires: Date) {
+export async function setLoginCookie(name: "ady_hr" | "ady_intern", value: string, expires: Date) {
   (await cookies()).set(name, value, {
     httpOnly: true,
     sameSite: "lax",

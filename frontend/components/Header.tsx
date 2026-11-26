@@ -64,7 +64,7 @@ export function Header() {
         <h3>How do I start?</h3>
         <p>Open the shared onboarding link or scan the QR from HR and enter your registered email.</p>
         <h3>Can I finish later?</h3>
-        <p>Yes. Enter your registered email at the shared link. Your 30 days start at your first sign-in. A new browser can open saved documents after inbox confirmation when email delivery is available.</p>
+        <p>Your sign-in lasts up to 30 days. Use your registered email on any browser to check your status. Contact HR if you need help with a saved application.</p>
         <h3>When is my letter ready?</h3>
         <p>
           People Operations will review your signed offer. You’ll receive an

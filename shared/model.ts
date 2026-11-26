@@ -30,7 +30,6 @@ export type Draft = {
   year?: string;
 };
 export type Invitation = {
-  rememberedBrowser?: boolean;
   id: string;
   revision: string;
   token: string;

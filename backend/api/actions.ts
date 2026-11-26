@@ -1,13 +1,6 @@
 import { exportReceived, signatureSvg } from "../services/received-export";
 import { roster, importRoster, exportRoster, removeFromRoster } from "../services/roster";
-import {
-  verifyRosterEmail,
-  rememberedDevice,
-  rememberBrowser,
-  redeemAccess,
-  changeAccess,
-
-} from "../services/access-mail";
+import { verifyRosterEmail, changeAccess } from "../services/access-mail";
 import { cookies } from "next/headers";
 import { NextRequest, NextResponse } from "next/server";
 import QRCode from "qrcode";
@@ -33,10 +26,6 @@ import { readPolicyPdf, signingPolicies } from "../services/signing-policies";
 type Context = { params: Promise<{ action: string }> };
 const json = (body: unknown, status = 200) =>
   NextResponse.json(body, { status, headers: { "Cache-Control": "no-store" } });
-async function setInternCookies(session: { token: string; device: string; expires: Date }) {
-  await setLoginCookie("ady_intern", session.token, session.expires);
-  await setLoginCookie("ady_device", session.device, session.expires);
-}
 function error(e: unknown) {
   if (e instanceof Problem) return json({ error: e.message }, e.status);
   if (e instanceof Error && "code" in e && e.code === "28P01") {
@@ -64,21 +53,11 @@ export async function GET(req: NextRequest, ctx: Context) {
   try {
     const { action } = await ctx.params,
       q = req.nextUrl.searchParams;
-    if (action === "remembered-email") {
-      const device = await rememberedDevice(pool, (await cookies()).get("ady_device")?.value);
-      return json({ email: device?.email ?? "" });
-    }
     if (action === "application") {
-      const user = await auth();
-      const inv = await details(pool, user.invitation);
-      requireThat(
-        !q.get("token") || q.get("token") === inv.token,
-        "Verify this invitation to continue.",
-        401,
-      );
-      const device = (await cookies()).get("ady_device")?.value;
-      const remembered = await rememberedDevice(pool, device);
-      return json({ ...inv, rememberedBrowser: remembered?.invitation === inv.id });
+      const user = await auth(false, true);
+      requireThat(!q.get("token") || q.get("token") === user.token, "Sign in to this application.", 401);
+      if (user.method === "roster-status") return json({ statusOnly: true, email: user.email, status: user.status });
+      return json(await details(pool, user.invitation));
     }
     if (action === "signing-policy") {
       await auth();
@@ -233,8 +212,8 @@ export async function POST(req: NextRequest, ctx: Context) {
       "Choose a file up to 8 MB.",
       413,
     );
-    if (!["roster-login", "redeem-link", "hr-login", "logout"].includes(action))
-      await auth(!["draft", "upload", "submit", "remember-browser"].includes(action));
+    if (!["roster-login", "hr-login", "logout"].includes(action))
+      await auth(!["draft", "upload", "submit"].includes(action));
     const body = req.body?.getReader();
     requireThat(body, "Empty request.");
     const parts: Uint8Array<ArrayBuffer>[] = [];
@@ -253,19 +232,8 @@ export async function POST(req: NextRequest, ctx: Context) {
       headers: { "Content-Type": req.headers.get("content-type") || "" },
     }).formData();
     if (action === "roster-login") {
-      const device = (await cookies()).get("ady_device")?.value;
-      const result = await verifyRosterEmail(emailAddress(data), device, data.get("recover") === "yes");
-      if (!("token" in result)) return json(result);
-      await setInternCookies(result);
-      return json({ ok: true });
-    }
-    if (action === "redeem-link") {
-      const session = await redeemAccess(
-        field(data, "token", 32),
-        field(data, "access", 43),
-        (await cookies()).get("ady_device")?.value,
-      );
-      await setInternCookies(session);
+      const session = await verifyRosterEmail(emailAddress(data));
+      await setLoginCookie("ady_intern", session.token, session.expires);
       return json({ ok: true });
     }
     if (action === "hr-login") {
@@ -281,16 +249,6 @@ export async function POST(req: NextRequest, ctx: Context) {
       ]);
       jar.delete(key);
       return json({ ok: true });
-    }
-    if (action === "remember-browser") {
-      const user = await auth();
-      requireThat(data.get("invitation") === user.invitation, "Reopen your application.", 409);
-      const jar = await cookies();
-      const key = await rememberBrowser(user.invitation, jar.get("ady_intern")!.value,
-        jar.get("ady_device")?.value, data.get("remember") === "yes");
-      if (key) await setLoginCookie("ady_device", key.key, key.expires);
-      else jar.delete("ady_device");
-      return json({ rememberedBrowser: !!key });
     }
     if (["upload", "draft", "submit"].includes(action)) {
       const user = await auth();

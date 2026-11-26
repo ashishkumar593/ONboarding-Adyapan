@@ -145,28 +145,6 @@ test.afterAll(async () => {
   )
     await fs.rm(dir, { force: true, recursive: true });
 });
-function personalLink(message) {
-  return message.text
-    .split("\n")
-    .find((line) => line.startsWith(origin + "/apply?invite="));
-}
-async function openFromInbox(page, subject, heading = "Your application") {
-  const envelope = (await messages()).find(
-    (m) => m.to === email && m.subject === subject,
-  );
-  expect(envelope).toBeTruthy();
-  const link = personalLink(envelope);
-  await page.goto(link);
-  await expect(
-    page.getByRole("heading", { name: "Resume onboarding" }),
-  ).toBeVisible();
-  expect((await page.request.get("/api/application")).status()).toBe(401);
-  await page.getByRole("button", { name: "Open my application" }).click();
-  await expect(
-    page.getByRole("heading", { name: heading }),
-  ).toBeVisible();
-  return link;
-}
 test("HR invitation, phone onboarding, correction and idempotent PDF issuance", async ({
   browser,
   page: hr,
@@ -263,67 +241,38 @@ test("HR invitation, phone onboarding, correction and idempotent PDF issuance", 
   await expect(
     phone.getByRole("heading", { name: "Your documents" }),
   ).toBeVisible();
-  await expect(phone.getByLabel("Remember this personal browser for 30 days")).toBeChecked();
-  const device = (await first.cookies()).find(cookie => cookie.name === "ady_device");
-  expect(device.httpOnly).toBe(true);
-  expect(Math.abs(device.expires - Date.now() / 1000 - 30 * 86400)).toBeLessThan(60);
-  const deadline = (await db.query("SELECT expires FROM sessions WHERE invitation=$1 AND method='remember-browser'", [inviteId])).rows[0].expires;
-  const initialMailCount = (await messages()).length;
-  for (let visit = 0; visit < 2; visit++) {
-    await phone.getByRole("button", { name: "Sign out" }).click();
-    await expect(phone.getByLabel("Registered email address")).toHaveValue(email);
-    await phone.reload();
-    await expect(phone.getByLabel("Registered email address")).toHaveValue(email);
-    await phone.getByRole("button", { name: "Continue", exact: true }).click();
-    await expect(phone.getByRole("heading", { name: "Your documents" })).toBeVisible();
-    const internCookie = (await first.cookies()).find(cookie => cookie.name === "ady_intern");
-    expect(Math.abs(internCookie.expires - device.expires)).toBeLessThan(2);
-    const grants = await db.query("SELECT expires FROM sessions WHERE invitation=$1", [inviteId]);
-    expect(grants.rows.map(grant => grant.expires)).toEqual([deadline, deadline]);
+  const intern = phone;
+  const firstCookie = (await first.cookies()).find(c => c.name === "ady_intern");
+  expect(firstCookie.httpOnly).toBe(true);
+  expect(Math.abs(firstCookie.expires - Date.now() / 1000 - 30 * 86400)).toBeLessThan(60);
+  expect((await first.cookies()).some(c => c.name === "ady_device")).toBe(false);
+  const beforeLogin = (await messages()).length;
+  const second = await browser.newContext({ ...devices["iPhone 13"], baseURL: origin });
+  const returning = await second.newPage();
+  await returning.goto("/apply");
+  await returning.getByLabel("Registered email address").fill("uninvited@example.test");
+  await returning.getByRole("button", {name:"Continue",exact:true}).click();
+  await expect(returning.getByRole("alert").filter({hasText:"Check the email address"})).toBeVisible();
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await returning.getByLabel("Registered email address").fill(email.toUpperCase());
+    await returning.getByRole("button", {name:"Continue",exact:true}).click();
+    await expect(returning.getByRole("heading", {name:"Application status"})).toBeVisible();
+    await returning.reload();
+    await expect(returning.getByRole("status")).toHaveText("In progress");
+    const summary = await (await returning.request.get("/api/application")).json();
+    expect(summary).toEqual({statusOnly:true, email, status:"draft"});
+    const session = (await second.cookies()).find(c => c.name === "ady_intern");
+    expect(Math.abs(session.expires-firstCookie.expires)).toBeLessThan(2);
+    const full = await (await phone.request.get("/api/application")).json();
+    expect((await returning.request.get("/api/file?id=" + full.files[0].id)).status()).toBe(401);
+    expect((await returning.request.post("/api/draft", {headers:{Origin:origin},multipart:{invitation:inviteId}})).status()).toBe(401);
+    await returning.getByRole("button", {name:"Sign out",exact:true}).click();
+    await expect(returning.getByLabel("Registered email address")).toBeVisible();
   }
-  expect((await messages()).length).toBe(initialMailCount);
-  await db.query("UPDATE sessions SET expires=now()-interval '1 second' WHERE invitation=$1", [inviteId]);
-  await phone.reload();
-  await expect(phone.getByLabel("Registered email address")).toHaveValue("");
-  await phone.getByLabel("Registered email address").fill(email);
-  await phone.getByRole("button", { name: "Continue", exact: true }).click();
-  await expect(phone.getByText(/Your email is on the roster/)).toBeVisible();
-  expect((await messages()).length).toBe(initialMailCount);
-  expect((await phone.request.get("/api/application")).status()).toBe(401);
-  await first.close();
-  const second = await browser.newContext({
-      ...devices["iPhone 13"],
-      baseURL: origin,
-    }),
-    intern = await second.newPage();
-  await intern.goto(new URL(link).pathname);
-  await intern.getByRole("link", {name:"Start onboarding"}).click();
-  const numberOfMessages = (await messages()).length;
-  for (const address of ["uninvited@example.test", "absent@example.test"]) {
-    await intern.getByLabel("Registered email address").fill(address);
-    await intern
-      .getByRole("button", { name: "Continue", exact: true })
-      .click();
-    await expect(
-      intern.getByRole("alert").filter({ hasText: "Check the email address" }),
-    ).toBeVisible();
-    expect((await messages()).length).toBe(numberOfMessages);
-    expect((await intern.request.get("/api/application")).status()).toBe(401);
-  }
-  await intern.getByLabel("Registered email address").fill(email.toUpperCase());
-  await intern.getByRole("button", { name: "Continue", exact: true }).click();
-  await expect(intern.getByText(/Your email is on the roster/)).toBeVisible();
-  expect((await messages()).length).toBe(numberOfMessages);
-  await intern.getByRole("button", { name: "Email me a recovery link" }).click();
-  await expect(intern.getByText("Check your invited inbox for a fresh personal link.")).toBeVisible();
-  expect((await intern.request.get("/api/application")).status()).toBe(401);
-  await openFromInbox(intern,"Your personal onboarding link","Your documents");
-  const newDevice = (await second.cookies()).find(cookie => cookie.name === "ady_device");
-  expect(Math.abs(newDevice.expires - deadline.getTime() / 1000)).toBeLessThan(2);
-  await expect(intern.getByRole("heading", { name: "Your documents" })).toBeVisible();
-  await expect(
-    intern.getByRole("button", { name: "Continue to terms" }),
-  ).toBeDisabled();
+  expect((await messages()).length).toBe(beforeLogin);
+  await second.close();
+  await intern.reload();
+  await expect(intern.getByRole("heading", {name:"Your documents"})).toBeVisible();
   scanReply="stream: OK";
   for (const label of [
     "10th marksheet",
@@ -648,8 +597,7 @@ test("HR invitation, phone onboarding, correction and idempotent PDF issuance", 
   await db.query("UPDATE invitations SET intern_access_expires_at=now()-interval '1 second' WHERE id=$1", [inviteId]);
   expect((await intern.request.get("/api/application")).status()).toBe(401);
   expect((await intern.request.get(href)).status()).toBe(401);
-  expect(await (await intern.request.get("/api/remembered-email")).json()).toEqual({email:""});
-  await second.close();
+  await first.close();
 });
 test("welcome fits phone and desktop, and help and stage details open", async ({
   page,
@@ -949,8 +897,8 @@ test("named HR credentials, assignments, freshness and intern revocation", async
     expect((await intern.get("/api/application")).status()).toBe(401);
     expect((await post(intern,"roster-login",{email:"scope@example.test"})).status()).toBe(401);
     expect((await post(hr,"restore",{id})).ok()).toBeTruthy();
-    expect(await (await post(intern,"roster-login",{email:"scope@example.test"})).json()).toEqual({useOriginalBrowser:true,canEmail:true});
-    expect((await intern.get("/api/application")).status()).toBe(401);
+    expect(await (await post(intern,"roster-login",{email:"scope@example.test"})).json()).toEqual({ok:true});
+    expect(await (await intern.get("/api/application")).json()).toEqual({statusOnly:true,email:"scope@example.test",status:"submitted"});
     await db.query("UPDATE invitations SET intern_access_expires_at=now()-interval '1 second' WHERE id=$1",[id]);
     expect((await post(intern,"roster-login",{email:"scope@example.test",recover:"yes"})).status()).toBe(403);
     await db.query("UPDATE sessions SET verified_at=now()-interval '11 minutes' WHERE staff=$1",[hrEmail]);

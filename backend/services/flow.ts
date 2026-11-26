@@ -346,7 +346,6 @@ export async function review(id: string, action: string, data: FormData, staff: 
         return;
       const issued = current.status === "issued";
       await sendAccessMail(
-        db,
         current,
         issued ? "issued" : "correction",
         current.requirements.find((r) => r.id === current.correction?.slot)
