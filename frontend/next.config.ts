@@ -7,7 +7,8 @@ const config: NextConfig = {
   outputFileTracingIncludes: {
     "/api/*": [
       "./policies/*.pdf",
-      "./node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs",
+      // PDF.js imports its worker at runtime from the repository's dependencies.
+      "../node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs",
     ],
   },
   poweredByHeader: false,

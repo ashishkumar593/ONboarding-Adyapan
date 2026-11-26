@@ -58,7 +58,8 @@ async function findHrSignatureSpace(source: Buffer, size: { width: number; heigh
       await task.destroy().catch(() => {});
     }
   } catch (e) {
-    console.warn("HR signature block lookup failed; using footer stamp:", e instanceof Error ? e.message : e);
+    console.error("HR signature block lookup failed:", e instanceof Error ? e.name : "unknown error");
+    throw new Problem("The signing service could not read the signature area. The offer is still awaiting issuance.", 503);
   }
 }
 // Fingerprint of the retired, unfilled demo PDF. An uploaded filename is not evidence of its contents.
