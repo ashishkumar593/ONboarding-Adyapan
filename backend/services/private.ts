@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
 import nodemailer from "nodemailer";
-import { screenDocument, validateDocument } from "./screen";
+import { screenDocument, ScreeningUnavailable, validateDocument } from "./screen";
 import { pool } from "./db";
 import type { PoolClient } from "pg";
 import { demo, requireThat, Problem } from "./db";
@@ -103,9 +103,21 @@ export async function upload(file: FormDataEntryValue | null, pdfOnly = false) {
     "Choose a file up to 8 MB.",
   );
   const data = Buffer.from(await file.arrayBuffer());
-  await screenDocument(data);
-  const mime = await validateDocument(data,pdfOnly);
-  return { data, name: file.name.slice(0, 180), mime };
+  let pending = false;
+  try {
+    await screenDocument(data);
+  } catch (error) {
+    if (!(error instanceof ScreeningUnavailable)) throw error;
+    pending = true;
+  }
+  // Only inspect the signature before quarantine. Full parsing follows a clean scan.
+  let mime: string;
+  if (!pending) mime = await validateDocument(data, pdfOnly);
+  else if (data.subarray(0, 5).toString() === "%PDF-") mime = "application/pdf";
+  else if (!pdfOnly && data.subarray(0, 8).equals(Buffer.from("89504e470d0a1a0a", "hex"))) mime = "image/png";
+  else if (!pdfOnly && data.subarray(0, 3).equals(Buffer.from("ffd8ff", "hex"))) mime = "image/jpeg";
+  else throw new Problem(pdfOnly ? "Choose a PDF file." : "Choose a PDF, PNG or JPEG file.");
+  return { data, name: file.name.slice(0, 180), mime, pending };
 }
 
 export const contentDigest = (data: Uint8Array) => crypto.createHash("sha256").update(data).digest("hex");

@@ -9,6 +9,7 @@ export type SigningPolicy = {
 };
 export type Slot = { id: string; label: string };
 export type Doc = {
+  pending?: boolean;
   id: string;
   slot: string;
   name: string;
@@ -25,6 +26,7 @@ export type Draft = {
   year?: string;
 };
 export type Invitation = {
+  rememberedBrowser?: boolean;
   id: string;
   revision: string;
   token: string;

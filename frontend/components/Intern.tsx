@@ -90,6 +90,7 @@ export default function Intern({ token }: { token: string }) {
     }
   }
   async function verifyEmail() {
+    setEmailSent(false);
     const result = await request("roster-login", form({ email }));
     if (result.emailSent) { setEmailSent(true); return; }
     await load(true);
@@ -141,7 +142,7 @@ export default function Intern({ token }: { token: string }) {
       >
         <div className="row between">
           <h3>{slot.label}</h3>
-          {doc && <BadgeCheck size={19} />}
+          {doc && !doc.pending && <BadgeCheck size={19} />}
         </div>
         {slot.label === "Degree or last-semester marksheet" && (
           <p>
@@ -150,6 +151,7 @@ export default function Intern({ token }: { token: string }) {
           </p>
         )}
         <small>{pdfOnly ? "PDF" : "PDF, PNG or JPEG"} · Up to 8 MB</small>
+        {doc?.pending && <p role="status">File saved privately. You can continue filling out your application. Screening must finish before you can open the file or submit.</p>}
         {doc && (
           <a
             className="filelink"
@@ -240,7 +242,7 @@ export default function Intern({ token }: { token: string }) {
           ) : (
             <>
               {emailSent && <p className="notice" role="status">Check your invited inbox for a fresh personal link.</p>}
-              <p>Enter the email address on the HR roster.</p>
+              <p>Use the same registered email each time you sign in. On a new browser, check your inbox for a link to your saved application.</p>
               <form
                 onSubmit={(e) => {
                   e.preventDefault();
@@ -537,6 +539,17 @@ export default function Intern({ token }: { token: string }) {
             <LockKeyhole size={14} />
             {inv.email}
           </span>
+          <label className="check">
+            <input type="checkbox" checked={!!inv.rememberedBrowser} disabled={busy}
+              onChange={e => {
+                const remember = e.target.checked;
+                void run(async () => {
+                  const result = await request("remember-browser", form({ invitation: inv.id, remember: remember ? "yes" : "no" }));
+                  setInv(current => current && ({ ...current, rememberedBrowser: result.rememberedBrowser }));
+                });
+              }} />
+            Remember this personal browser for 30 days
+          </label>
           <button
             className="textbtn"
             disabled={busy}
@@ -545,8 +558,8 @@ export default function Intern({ token }: { token: string }) {
                 await request("logout", form({}));
                 setInv(null);
                 setAccess("");
-                setInv(null);
                 setStep(0);
+                setEmailSent(false);
               })
             }
           >

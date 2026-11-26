@@ -2,7 +2,7 @@ import { screenDocument } from "./screen";
 import { assigned, type StaffSession } from "./auth";
 import crypto from "node:crypto";
 import type { PoolClient } from "pg";
-import { details, event, requireThat, transaction } from "./db";
+import { details, event, Problem, requireThat, transaction } from "./db";
 import { put, get, upload, contentDigest } from "./private";
 import { sendAccessMail } from "./access-mail";
 import { countersign, requireSignedOffer } from "./issue";
@@ -35,13 +35,13 @@ export async function storeFile(
   db: PoolClient,
   inv: string,
   slot: string,
-  file: { data: Uint8Array; name: string; mime: string },
+  file: { data: Uint8Array; name: string; mime: string; pending?: boolean },
 ) {
   const id = crypto.randomUUID();
   await put(id, file.data, file.mime);
   await db.query(
     "INSERT INTO files(id,invitation,slot,name,mime,bytes,clean_digest) VALUES($1,$2,$3,$4,$5,$6,$7)",
-    [id, inv, slot, file.name, file.mime, file.data.length, contentDigest(file.data)],
+    [id, inv, slot, file.name, file.mime, file.data.length, file.pending ? null : contentDigest(file.data)],
   );
   return id;
 }
@@ -165,6 +165,18 @@ export async function internAction(id: string, action: string, data: FormData) {
         inv.files.find((f) => f.slot === r.id),
       );
       requireThat(docs.every(Boolean), "Upload each required document.");
+      for (const doc of docs) {
+        if (doc?.pending) {
+          try { await get(doc.id, db); }
+          catch (error) {
+            if (error instanceof Problem) throw new Problem(
+              (inv.requirements.find(r => r.id === doc.slot)?.label || "Document") + " — " + error.message,
+              error.status,
+            );
+            throw error;
+          }
+        }
+      }
       requireThat(
         inv.reference || profileComplete(inv),
         "Complete your personal details and upload your résumé.",

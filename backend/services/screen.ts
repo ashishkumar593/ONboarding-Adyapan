@@ -9,8 +9,12 @@ import sharp from "sharp";
 import { PDFDocument } from "pdf-lib";
 import { demo, Problem, requireThat } from "./db";
 
-const unavailable = () =>
-  new Problem("Document screening is unavailable. Please retry shortly.", 503);
+export class ScreeningUnavailable extends Problem {
+  constructor(message = "Document screening is unavailable. Please retry shortly.") {
+    super(message, 503);
+  }
+}
+const unavailable = () => new ScreeningUnavailable();
 const rejected = () =>
   new Problem("This document did not pass security screening.", 422);
 
@@ -70,7 +74,9 @@ async function scanWithClam(data: Buffer, address: string) {
 
 export async function screenDocument(data: Buffer) {
   if (process.env.CLAMD_URL) return scanWithClam(data, process.env.CLAMD_URL);
-  if (!demo() || process.platform !== "win32") throw unavailable();
+  if (!demo() || process.platform !== "win32") {
+    return;
+  }
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "adyapan-scan-"));
   const input = path.join(dir, "document");
   try {

@@ -2,6 +2,8 @@ import { exportReceived } from "../services/received-export";
 import { roster, importRoster, exportRoster, removeFromRoster } from "../services/roster";
 import {
   verifyRosterEmail,
+  remembersBrowser,
+  rememberBrowser,
   redeemAccess,
   changeAccess,
 
@@ -12,6 +14,7 @@ import QRCode from "qrcode";
 import { auth, login, permit, assigned, requireFresh, logAccess, setSession } from "../services/auth";
 import {
   details,
+  demo,
   hash,
   pool,
   Problem,
@@ -60,7 +63,8 @@ export async function GET(req: NextRequest, ctx: Context) {
         "Verify this invitation to continue.",
         401,
       );
-      return json(inv);
+      const device = (await cookies()).get("ady_device")?.value;
+      return json({ ...inv, rememberedBrowser: await remembersBrowser(pool, inv.id, device) });
     }
     if (action === "signing-policy") {
       await auth();
@@ -184,7 +188,7 @@ export async function POST(req: NextRequest, ctx: Context) {
       413,
     );
     if (!["roster-login", "redeem-link", "hr-login", "logout"].includes(action))
-      await auth(!["draft", "upload", "submit"].includes(action));
+      await auth(!["draft", "upload", "submit", "remember-browser"].includes(action));
     const body = req.body?.getReader();
     requireThat(body, "Empty request.");
     const parts: Uint8Array<ArrayBuffer>[] = [];
@@ -203,7 +207,8 @@ export async function POST(req: NextRequest, ctx: Context) {
       headers: { "Content-Type": req.headers.get("content-type") || "" },
     }).formData();
     if (action === "roster-login") {
-      const sessionToken = await verifyRosterEmail(emailAddress(data));
+      const device = (await cookies()).get("ady_device")?.value;
+      const sessionToken = await verifyRosterEmail(emailAddress(data), device);
       if (!sessionToken) return json({ emailSent: true });
       await setSession(sessionToken);
       return json({ ok: true });
@@ -229,6 +234,19 @@ export async function POST(req: NextRequest, ctx: Context) {
       ]);
       jar.delete(key);
       return json({ ok: true });
+    }
+    if (action === "remember-browser") {
+      const user = await auth();
+      requireThat(data.get("invitation") === user.invitation, "Reopen your application.", 409);
+      const jar = await cookies();
+      const key = await rememberBrowser(user.invitation, jar.get("ady_intern")!.value,
+        jar.get("ady_device")?.value, data.get("remember") === "yes");
+      if (key) jar.set("ady_device", key, {
+        httpOnly: true, sameSite: "lax", secure: !demo() || process.env.APP_ORIGIN?.startsWith("https://"),
+        path: "/", maxAge: 30 * 86400,
+      });
+      else jar.delete("ady_device");
+      return json({ rememberedBrowser: !!key });
     }
     if (["upload", "draft", "submit"].includes(action)) {
       const user = await auth();

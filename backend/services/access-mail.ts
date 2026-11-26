@@ -53,17 +53,43 @@ export async function sendAccessMail(
   );
 }
 
-export async function verifyRosterEmail(email: string) {
+export async function remembersBrowser(db: Pick<PoolClient, "query">, id: string, key?: string) {
+  if (!key) return false;
+  return !!(await db.query(
+    "SELECT 1 FROM sessions WHERE invitation=$1 AND digest=$2 AND method='remember-browser' AND expires>now()",
+    [id, hash("device:" + key)],
+  )).rowCount;
+}
+
+export async function rememberBrowser(id: string, sessionToken: string, previous: string | undefined, enable: boolean) {
+  return transaction(async db => {
+    const record = await db.query("SELECT id FROM invitations WHERE id=$1 AND access_revoked_at IS NULL FOR UPDATE", [id]);
+    const active = await db.query("SELECT 1 FROM sessions WHERE invitation=$1 AND digest=$2 AND method IN ('invitation','mail') AND expires>now()", [id, hash(sessionToken)]);
+    requireThat(record.rowCount && active.rowCount, "Sign in again to manage this browser.", 401);
+    if (previous) await db.query("DELETE FROM sessions WHERE digest=$1 AND method='remember-browser'", [hash("device:" + previous)]);
+    if (!enable) return null;
+    const key = crypto.randomBytes(32).toString("base64url");
+    await db.query(
+      "INSERT INTO sessions(digest,invitation,method,expires) VALUES($1,$2,'remember-browser',now()+interval '30 days')",
+      [hash("device:" + key), id],
+    );
+    return key;
+  });
+}
+
+export async function verifyRosterEmail(email: string, device?: string) {
   return transaction(async db => {
     const recipient = (await db.query(
-      `SELECT *,status IN ('queued','invited') AND draft='{}'::jsonb AND reference IS NULL
+      `SELECT *,status IN ('queued','invited','draft') AND draft='{}'::jsonb AND reference IS NULL
           AND NOT EXISTS(SELECT 1 FROM files WHERE invitation=i.id)
-          AND NOT EXISTS(SELECT 1 FROM sessions WHERE invitation=i.id) AS first_claim,
-          last_access_request_at>now()-interval '1 minute' AS recently_mailed
+          AND NOT EXISTS(SELECT 1 FROM sessions WHERE invitation=i.id AND expires>now()) AS first_claim,
+          last_access_request_at>now()-interval '1 minute' AND EXISTS(
+            SELECT 1 FROM email_access_links WHERE invitation=i.id AND expires_at>now()) AS recently_mailed
        FROM invitations i WHERE lower(email)=$1 AND status <> 'removed'
        ORDER BY starts DESC,created_at DESC,id DESC LIMIT 1 FOR UPDATE`,
       [email])).rows[0];
     requireThat(recipient && !recipient.access_revoked_at,"Check the email address or contact HR to join the roster.",401);
+    if (await remembersBrowser(db, recipient.id, device)) return session(db,recipient.id);
     if (recipient.first_claim) {
       await db.query("UPDATE invitations SET status='draft',qr_expires_at=NULL WHERE id=$1",[recipient.id]);
       return session(db,recipient.id);

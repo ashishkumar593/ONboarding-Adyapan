@@ -68,7 +68,7 @@ export async function details(
   requireThat(row, "Invitation unavailable.", 404);
   const files = (
     await db.query(
-      "SELECT DISTINCT ON(slot) id,slot,name,mime,bytes FROM files WHERE invitation=$1 AND slot <> 'original' ORDER BY slot,created_at DESC",
+      "SELECT DISTINCT ON(slot) id,slot,name,mime,bytes,(clean_digest IS NULL) AS pending FROM files WHERE invitation=$1 AND slot <> 'original' ORDER BY slot,created_at DESC",
       [id],
     )
   ).rows;

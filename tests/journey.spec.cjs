@@ -240,6 +240,7 @@ test("HR invitation, phone onboarding, correction and idempotent PDF issuance", 
   await expect(
     phone.getByRole("button", { name: "Save and continue" }),
   ).toBeDisabled();
+  scanReply="stream: scanner unavailable ERROR";
   await phone
     .getByLabel("Upload Résumé")
     .setInputFiles({ ...sample, name: "resume.pdf" });
@@ -247,6 +248,14 @@ test("HR invitation, phone onboarding, correction and idempotent PDF issuance", 
   await expect(
     phone.getByRole("heading", { name: "Your documents" }),
   ).toBeVisible();
+  await phone.getByLabel("Remember this personal browser for 30 days").click();
+  await expect(phone.getByLabel("Remember this personal browser for 30 days")).toBeChecked();
+  for (let visit = 0; visit < 2; visit++) {
+    await phone.getByRole("button", { name: "Sign out" }).click();
+    await phone.getByLabel("Registered email address").fill(email);
+    await phone.getByRole("button", { name: "Continue", exact: true }).click();
+    await expect(phone.getByRole("heading", { name: "Your documents" })).toBeVisible();
+  }
   await first.close();
   const second = await browser.newContext({
       ...devices["iPhone 13"],
@@ -275,6 +284,7 @@ test("HR invitation, phone onboarding, correction and idempotent PDF issuance", 
   await expect(
     intern.getByRole("button", { name: "Continue to terms" }),
   ).toBeDisabled();
+  scanReply="stream: OK";
   for (const label of [
     "10th marksheet",
     "Intermediate marksheet",
@@ -294,6 +304,15 @@ test("HR invitation, phone onboarding, correction and idempotent PDF issuance", 
   await intern.getByText("Review your details and uploads").click();
   await expect(intern.getByText("ADY-IN-007")).toBeVisible();
   const agreement = await (await intern.request.get("/api/application")).json();
+  expect(agreement.files.find(file=>file.slot==="resume").pending).toBe(true);
+  scanReply="stream: scanner unavailable ERROR";
+  const paused = await intern.request.post("/api/submit", {
+    headers:{Origin:origin}, multipart:{invitation:inviteId,revision:agreement.revision,
+      version:agreement.version,agreed:"yes",signatureMode:"type",signature:"Aarya Test"},
+  });
+  expect(paused.status()).toBe(503);
+  expect((await db.query("SELECT 1 FROM submissions WHERE invitation=$1",[inviteId])).rowCount).toBe(0);
+  scanReply="stream: OK";
   const policies = intern.locator(".signing-policy");
   await expect(policies).toHaveCount(2);
   const displayedTerms = [agreement.terms];
@@ -767,12 +786,17 @@ test("named HR credentials, assignments, freshness and intern revocation", async
     expect((await post(intern,"roster-login",{email:"scope@example.test"})).ok()).toBeTruthy();
     scanReply="stream: screening-test FOUND";
     expect((await post(intern,"upload",{invitation:id,slot:"resume",file:sample})).status()).toBe(422);
-    scanReply="stream: scanner unavailable ERROR";
-    expect((await post(intern,"upload",{invitation:id,slot:"resume",file:sample})).status()).toBe(503);
     expect((await db.query("SELECT count(*)::int AS n FROM files WHERE invitation=$1",[id])).rows[0].n).toBe(0);
-    scanReply="stream: OK";
+    scanReply="stream: scanner unavailable ERROR";
     expect((await post(intern,"upload",{invitation:id,slot:"resume",file:sample})).ok()).toBeTruthy();
     const file=(await db.query("SELECT id FROM files WHERE invitation=$1",[id])).rows[0].id;
+    expect((await (await intern.get("/api/application")).json()).files[0].pending).toBe(true);
+    expect((await intern.get("/api/file?id="+file)).status()).toBe(503);
+    scanReply="stream: screening-test FOUND";
+    expect((await intern.get("/api/file?id="+file)).status()).toBe(422);
+    scanReply="stream: OK";
+    expect((await intern.get("/api/file?id="+file)).ok()).toBeTruthy();
+    expect((await (await intern.get("/api/application")).json()).files[0].pending).toBe(false);
     expect((await reviewer.get("/api/file?hr=1&id="+file)).status()).toBe(404);
     await db.query("INSERT INTO hr_assignments(staff,invitation) VALUES($1,$2)",[reviewerEmail,id]);
     expect((await post(reviewer,"issue",{id})).status()).toBe(403);
