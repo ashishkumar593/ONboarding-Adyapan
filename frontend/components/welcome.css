@@ -4,23 +4,6 @@
   --welcome-border: #d8dbcf;
   padding-block: clamp(26px, 3.4vw, 54px) clamp(40px, 5vw, 72px);
 }
-.brand-mark {
-  display: inline-grid;
-  position: relative;
-  place-items: center;
-  flex: none;
-}
-.brand-mark img {
-  display: block;
-}
-.welcome-mark::after {
-  content: "";
-  position: absolute;
-  inset: -2px;
-  border: 1px solid #bf8739;
-  border-radius: 50%;
-  animation: ring 0.7s ease-out both;
-}
 .welcome-intro {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1.03fr);

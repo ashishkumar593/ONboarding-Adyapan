@@ -83,7 +83,22 @@ footer {
   gap: 9px;
   text-decoration: none;
 }
+.brand-mark {
+  display: inline-grid;
+  position: relative;
+  place-items: center;
+  flex: none;
+}
+.welcome-mark::after {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  border: 1px solid #bf8739;
+  border-radius: 50%;
+  animation: ring 0.7s ease-out both;
+}
 .brand img {
+  display: block;
   width: 35px;
   height: 35px;
   object-fit: contain;

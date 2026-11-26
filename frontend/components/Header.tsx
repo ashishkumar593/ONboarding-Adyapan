@@ -15,7 +15,7 @@ export function Header() {
           <a href="/" className="brand">
             <i
               className={
-                path === "/" || path.startsWith("/i/")
+                path === "/" || path === "/hr" || path.startsWith("/i/")
                   ? "brand-mark welcome-mark"
                   : "brand-mark"
               }
