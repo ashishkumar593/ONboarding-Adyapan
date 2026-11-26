@@ -137,7 +137,6 @@ export async function internAction(id: string, action: string, data: FormData, r
       for (const key of profileFields) {
         const value = data.get(key);
         if (value === null) continue;
-        requireThat(!resumed || !privateField(inv,resumed,key), "This detail is already saved.",409);
         requireThat(typeof value === "string" && value.length <= profileLimits[key], "Check your personal details.");
         patch[key] = value.trim();
       }

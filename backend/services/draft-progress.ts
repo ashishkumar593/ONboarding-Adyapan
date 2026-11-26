@@ -16,18 +16,24 @@ export const privateField = (inv: Invitation, session: ResumeSession, key: Profi
   validProfileValue(key, inv.draft[key]) && session.progress[key] !== fieldDigest(session,key,inv.draft[key]!);
 
 export function resumeView(inv: Invitation, session: ResumeSession): InternView {
-  const draft: Draft = {};
-  const savedFields = profileFields.filter(key => privateField(inv,session,key));
-  for (const key of profileFields) {
-    const value = inv.draft[key];
-    if (value !== undefined && session.progress[key] === fieldDigest(session,key,value)) draft[key] = value;
-  }
-  const signed = inv.files.find(f => f.slot === "signed");
   return {
-    id:inv.id, email:inv.email, status:inv.status, requirements:inv.requirements, terms:inv.terms,
-    policies:inv.policies, version:inv.version, revision:resumeRevision(inv,session), draft, savedFields,
-    files:inv.files.filter(f => inv.requirements.some(r => r.id === f.slot)).map(({slot,pending}) => ({slot,pending})),
-    confirmSignedOffer:!!signed && session.progress.signed !== signed.id,
-    name:"", role:"", starts:"", ends:"", reference:null, correction:null, issued_file:null,
+    id: inv.id,
+    email: inv.email,
+    status: inv.status,
+    requirements: inv.requirements,
+    terms: inv.terms,
+    policies: inv.policies,
+    version: inv.version,
+    revision: resumeRevision(inv, session),
+    draft: inv.draft,
+    files: inv.files.filter((f) => inv.requirements.some((r) => r.id === f.slot)),
+    confirmSignedOffer: false,
+    name: inv.name,
+    role: inv.role,
+    starts: inv.starts,
+    ends: inv.ends,
+    reference: null,
+    correction: null,
+    issued_file: null,
   };
 }

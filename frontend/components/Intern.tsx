@@ -157,7 +157,7 @@ export default function Intern({ token }: { token: string }) {
   function renderUpload(slot: Slot) {
     if (!inv) return null;
     const doc = inv.files.find((f) => f.slot === slot.id),
-      locked = (!!inv.correction && inv.correction.slot !== slot.id) || (!!inv.savedFields && !!doc);
+      locked = !!inv.correction && inv.correction.slot !== slot.id;
     const pdfOnly = slot.id === "signed" || isResume(slot);
     return (
       <div
@@ -178,7 +178,6 @@ export default function Intern({ token }: { token: string }) {
         )}
         <small>{pdfOnly ? "PDF" : "PDF, PNG or JPEG"} · Up to 8 MB</small>
         {doc?.pending && <p role="status">File saved privately. You can continue filling out your application. Screening must finish before you can open the file or submit.</p>}
-        {doc && !doc.id && <p>On file</p>}
         {doc?.id && (
           <a
             className="filelink"
@@ -519,9 +518,6 @@ export default function Intern({ token }: { token: string }) {
                       aria-label={`Open original PDF for ${policy.title} (opens in a new tab)`}>
                       Open original PDF
                     </a>
-                    <button type="button" className="secondary" disabled={busy}
-                      onClick={() => run(() => downloadPolicy(policy.file))}
-                      aria-label={`Download PDF for ${policy.title}`}>Download PDF</button>
                   </div>
                 </section>
               ))}
