@@ -391,12 +391,6 @@ export default function Workspace() {
                       Send notification
                     </button>
                   )}
-                  {permissions.includes("invite") && <button className="secondary" disabled={working} onClick={()=>run(async()=>{
-                    const action = inv.access_revoked_at ? "restore" : "revoke";
-                    if (!window.confirm(action === "revoke" ? "Revoke this intern's portal access and active sessions?" : "Restore access through the shared onboarding link?")) return;
-                    await request(action,form({id:inv.id})); await open(inv.id);
-                    setNotice(action === "revoke" ? "Intern access revoked." : "Intern access restored.");
-                  })}>{inv.access_revoked_at ? "Restore intern access" : "Revoke intern access"}</button>}
                 </section>
               </div>
             </>

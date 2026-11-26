@@ -25,7 +25,7 @@ import {
   type InternView, type ProfileField, profileFields,
 } from "@shared/model";
 
-type RosterStatus = { statusOnly: true; email: string; status: string };
+type RosterStatus = { statusOnly: true; email: string; status: string; issued_file?: string | null };
 
 export default function Intern({ token }: { token: string }) {
   const [inv, setInv] = useState<InternView | null>(null),
@@ -38,7 +38,7 @@ export default function Intern({ token }: { token: string }) {
     [progress, setProgress] = useState<Record<string, number>>({});
   const invitationId = inv?.id;
   const autosave = useMemo(() => {
-    let pending: Record<string,string> = {};
+    let pending: Record<string, string> = {};
     let timer: ReturnType<typeof setTimeout> | undefined;
     let saving: Promise<void> | undefined;
     function flush() {
@@ -50,9 +50,9 @@ export default function Intern({ token }: { token: string }) {
           const values = pending;
           pending = {};
           try {
-            await request("save-progress",form({invitation:invitationId,...values}));
+            await request("save-progress", form({ invitation: invitationId, ...values }));
           } catch (e) {
-            pending = {...values,...pending};
+            pending = { ...values, ...pending };
             throw e;
           }
         }
@@ -61,7 +61,7 @@ export default function Intern({ token }: { token: string }) {
     }
     return {
       flush,
-      change(key:string, value:string) {
+      change(key: string, value: string) {
         pending[key] = value;
         clearTimeout(timer);
         timer = setTimeout(() => flush().catch(e => setError(e.message)), 400);
@@ -69,14 +69,14 @@ export default function Intern({ token }: { token: string }) {
       leave() {
         clearTimeout(timer);
         if (invitationId && Object.keys(pending).length)
-          void fetch("/api/save-progress",{method:"POST",keepalive:true,body:form({invitation:invitationId,...pending})}).catch(() => {});
+          void fetch("/api/save-progress", { method: "POST", keepalive: true, body: form({ invitation: invitationId, ...pending }) }).catch(() => { });
       },
     };
-  },[invitationId]);
+  }, [invitationId]);
   useEffect(() => {
-    window.addEventListener("pagehide",autosave.leave);
-    return () => window.removeEventListener("pagehide",autosave.leave);
-  },[autosave]);
+    window.addEventListener("pagehide", autosave.leave);
+    return () => window.removeEventListener("pagehide", autosave.leave);
+  }, [autosave]);
   async function load(resume = false) {
     const result: InternView | RosterStatus = await request(
       "application" + (token ? "?token=" + encodeURIComponent(token) : ""),
@@ -148,8 +148,8 @@ export default function Intern({ token }: { token: string }) {
   const corrected =
     !inv?.correction || !!policyCorrection ||
     inv.files.find((f) => f.slot === inv.correction!.slot)?.id !==
-      inv.correction.previous;
-  const reviewProfile = inv ? {...inv.draft} : {};
+    inv.correction.previous;
+  const reviewProfile = inv ? { ...inv.draft } : {};
   for (const key of inv?.savedFields ?? []) reviewProfile[key] = "Saved";
   function savedField(key: ProfileField) {
     return inv?.savedFields?.includes(key) ?? false;
@@ -248,7 +248,11 @@ export default function Intern({ token }: { token: string }) {
         <section className="panel">
           <h1>Application status</h1>
           <p role="status">{statuses[summary.status]}</p>
-          <p>{summary.status === "issued" ? "Contact HR for a copy of your stamped offer letter." : "Contact HR for help with your saved details and documents."}</p>
+          {summary.status === "issued" && summary.issued_file ? (
+            <IssuedOffer key={summary.issued_file} id={summary.issued_file} />
+          ) : (
+            <p>{summary.status === "issued" ? "Contact HR for a copy of your stamped offer letter." : "Contact HR for help with your saved details and documents."}</p>
+          )}
           <button className="secondary" disabled={busy} onClick={() => run(() => load())}>Refresh status</button>
         </section>
       ) : !inv ? (
@@ -374,9 +378,9 @@ export default function Intern({ token }: { token: string }) {
                 onChange={e => {
                   const input = e.target;
                   if (input instanceof HTMLInputElement && !inv.correction && !input.disabled &&
-                      profileFields.includes(input.name as ProfileField)) autosave.change(input.name,input.value);
+                    profileFields.includes(input.name as ProfileField)) autosave.change(input.name, input.value);
                 }}
-                onBlur={() => {void autosave.flush().catch(e => setError(e.message));}}
+                onBlur={() => { void autosave.flush().catch(e => setError(e.message)); }}
                 onSubmit={(e) => {
                   e.preventDefault();
                   const data = new FormData(e.currentTarget);
@@ -477,7 +481,7 @@ export default function Intern({ token }: { token: string }) {
               <details className="application-review">
                 <summary>Review your details and uploads</summary>
                 <dl className="review-list">
-                  {Object.entries(profileValues({...inv, draft:reviewProfile})).map(([k, v]) => (
+                  {Object.entries(profileValues({ ...inv, draft: reviewProfile })).map(([k, v]) => (
                     <div key={k}>
                       <dt>{k}</dt>
                       <dd>{v}</dd>
@@ -542,9 +546,9 @@ export default function Intern({ token }: { token: string }) {
                     if (inv.confirmSignedOffer) {
                       const file = data.get("confirmOffer");
                       if (!(file instanceof File) || file.size > 8 * 1024 * 1024) throw Error("Choose your original signed offer PDF (up to 8 MB).");
-                      const bytes = await crypto.subtle.digest("SHA-256",await file.arrayBuffer());
+                      const bytes = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
                       data.delete("confirmOffer");
-                      data.set("signedOfferDigest",Array.from(new Uint8Array(bytes),b => b.toString(16).padStart(2,"0")).join(""));
+                      data.set("signedOfferDigest", Array.from(new Uint8Array(bytes), b => b.toString(16).padStart(2, "0")).join(""));
                     }
                     await request("submit", data);
                     await load();
