@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { BlendMode, PDFDocument, concatTransformationMatrix, popGraphicsState, pushGraphicsState, rgb } from "pdf-lib";
 import UPNG from "@pdf-lib/upng";
 import { Problem, requireThat } from "./db";
+import { hasCloudinary, readObject } from "./private";
 import type { Invitation } from "@shared/model";
 import { getDocument, Util } from "pdfjs-dist/legacy/build/pdf.mjs";
 
@@ -100,10 +101,17 @@ export async function countersign(source: Buffer, inv: Invitation) {
     );
     return bytes;
   }
+  const encodedStamp = process.env.HR_STAMP_BASE64?.trim();
   const stampPath = process.env.HR_STAMP_PATH;
-  requireThat(stampPath, "Configure the HR manager stamp or signing service before issuance.", 503);
+  const useCloudinaryStamp = !encodedStamp && !stampPath && hasCloudinary();
+  requireThat(encodedStamp || stampPath || useCloudinaryStamp, "Configure HR_STAMP_BASE64 with the approved HR stamp PNG, or configure the signing service.", 503);
   const pdf = await PDFDocument.load(source);
-  const { stamp, ink } = await readFile(/* turbopackIgnore: true */ stampPath)
+  const stampBytes = encodedStamp
+    ? Promise.resolve(Buffer.from(encodedStamp, "base64"))
+    : stampPath
+      ? readFile(/* turbopackIgnore: true */ stampPath)
+      : readObject(process.env.HR_STAMP_CLOUDINARY_ID || "hr-manager-stamp");
+  const { stamp, ink } = await stampBytes
     .then(async bytes => ({ stamp: await pdf.embedPng(bytes), ink: stampInkBounds(bytes) }))
     .catch(() => { throw new Problem("The HR manager stamp could not be loaded. Check the configured PNG and retry.", 503); });
 

@@ -16,6 +16,15 @@ const password = crypto.randomBytes(24).toString("hex");
 const schema = "test_" + crypto.randomBytes(12).toString("hex");
 let dir, db, server, sample, scanner;
 let scanReply = "stream: OK";
+const useStampSecret = process.env.E2E_STAMP_SOURCE === "base64";
+const stamp = new PNG({ width: 37, height: 19 });
+stamp.data.fill(255);
+for (let row = 2; row < 16; row++) {
+  for (let col = 4; col < 33; col++) {
+    const pixel = 4 * (row * stamp.width + col);
+    stamp.data.fill(0, pixel, pixel + 3);
+  }
+}
 async function messages() {
   const outbox = path.join(dir, "mail");
   await fs.mkdir(outbox,{recursive:true});
@@ -92,7 +101,8 @@ test.beforeAll(async () => {
         CLOUDINARY_API_SECRET: "",
         SMTP_URL: "",
         SIGNING_URL: "",
-        HR_STAMP_PATH: path.join(dir, "test-stamp.png"),
+        HR_STAMP_BASE64: useStampSecret ? PNG.sync.write(stamp).toString("base64") : "",
+        HR_STAMP_PATH: useStampSecret ? "" : path.join(dir, "test-stamp.png"),
       },
     },
   );
@@ -445,17 +455,11 @@ test("HR invitation, phone onboarding, correction and idempotent PDF issuance", 
     (await (await hr.request.get("/api/record?id=" + inviteId)).json()).status,
   ).toBe("submitted");
   await fs.rename(object + ".offline", object);
-  await hr.getByRole("button", { name: "Countersign and issue" }).click();
-  await expect(hr.getByRole("alert").filter({ hasText: "stamp could not be loaded" })).toBeVisible();
-  const stamp = new PNG({ width: 37, height: 19 });
-  stamp.data.fill(255);
-  for (let row = 2; row < 16; row++) {
-    for (let col = 4; col < 33; col++) {
-      const pixel = 4 * (row * stamp.width + col);
-      stamp.data.fill(0, pixel, pixel + 3);
-    }
+  if (!useStampSecret) {
+    await hr.getByRole("button", { name: "Countersign and issue" }).click();
+    await expect(hr.getByRole("alert").filter({ hasText: "stamp could not be loaded" })).toBeVisible();
+    await fs.writeFile(path.join(dir, "test-stamp.png"), PNG.sync.write(stamp));
   }
-  await fs.writeFile(path.join(dir, "test-stamp.png"), PNG.sync.write(stamp));
   await hr.getByRole("button", { name: "Countersign and issue" }).click();
   await expect(
     hr.getByRole("link", { name: "Download stamped offer letter" }),

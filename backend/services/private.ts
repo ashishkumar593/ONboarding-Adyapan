@@ -55,7 +55,8 @@ export async function put(id: string, data: Uint8Array, mime: string) {
     { flag: "wx" },
   );
 }
-async function readObject(id: string): Promise<Buffer> {
+export const hasCloudinary = () => !!cloudinaryConfig();
+export async function readObject(id: string): Promise<Buffer> {
   const cld = cloudinaryConfig();
   if (cld) {
     const ts = Math.floor(Date.now() / 1000);
