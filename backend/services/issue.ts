@@ -26,35 +26,39 @@ function stampInkBounds(bytes: Uint8Array) {
 }
 
 async function findHrSignatureSpace(source: Buffer, size: { width: number; height: number }, ink: ReturnType<typeof stampInkBounds>) {
-  const task = getDocument({ data: new Uint8Array(source), useSystemFonts: false });
   try {
-    const document = await task.promise;
-    const last = await document.getPage(document.numPages);
-    const view = last.getViewport({ scale: 1 / last.userUnit });
-    const { items } = await last.getTextContent();
-    const words = items.flatMap(item => {
-      if (!("str" in item) || !item.str.trim()) return [];
-      const [, , , , x, top] = Util.transform(view.transform, item.transform);
-      const y = view.height - top;
-      return [{ text: item.str.trim(), x, y, right: x + item.width, upper: y + item.height }];
-    });
-    for (const manager of words.filter(word => /^(?:HR|HUMAN RESOURCES)\s+MANAGER\s*:?$/i.test(word.text))) {
-      const label = words.find(word => /^SIGNATURE\s*:?$/i.test(word.text)
-        && Math.abs(word.x - manager.x) < 30 && word.y >= manager.y && word.y - manager.y < 65);
-      if (!label) continue;
-      const x = (label.x + label.right - (ink.left + ink.right) * size.width) / 2;
-      // The uppercase glyphs occupy the cap height above the PDF text baseline.
-      const capTop = label.y + 0.67 * (label.upper - label.y);
-      const y = capTop - ink.bottom * size.height;
-      const left = x + ink.left * size.width, right = x + ink.right * size.width;
-      const top = y + ink.top * size.height;
-      const fits = left >= 0 && right <= view.width && capTop >= 0 && top <= view.height;
-      const overlaps = words.some(word => word !== label && word.x < right && word.right > left
-        && word.y < top && word.upper > capTop);
-      if (fits && !overlaps) return { x, y };
+    const task = getDocument({ data: new Uint8Array(source), useSystemFonts: false });
+    try {
+      const document = await task.promise;
+      const last = await document.getPage(document.numPages);
+      const view = last.getViewport({ scale: 1 / last.userUnit });
+      const { items } = await last.getTextContent();
+      const words = items.flatMap(item => {
+        if (!("str" in item) || !item.str.trim()) return [];
+        const [, , , , x, top] = Util.transform(view.transform, item.transform);
+        const y = view.height - top;
+        return [{ text: item.str.trim(), x, y, right: x + item.width, upper: y + item.height }];
+      });
+      for (const manager of words.filter(word => /^(?:HR|HUMAN RESOURCES)\s+MANAGER\s*:?$/i.test(word.text))) {
+        const label = words.find(word => /^SIGNATURE\s*:?$/i.test(word.text)
+          && Math.abs(word.x - manager.x) < 30 && word.y >= manager.y && word.y - manager.y < 65);
+        if (!label) continue;
+        const x = (label.x + label.right - (ink.left + ink.right) * size.width) / 2;
+        // The uppercase glyphs occupy the cap height above the PDF text baseline.
+        const capTop = label.y + 0.67 * (label.upper - label.y);
+        const y = capTop - ink.bottom * size.height;
+        const left = x + ink.left * size.width, right = x + ink.right * size.width;
+        const top = y + ink.top * size.height;
+        const fits = left >= 0 && right <= view.width && capTop >= 0 && top <= view.height;
+        const overlaps = words.some(word => word !== label && word.x < right && word.right > left
+          && word.y < top && word.upper > capTop);
+        if (fits && !overlaps) return { x, y };
+      }
+    } finally {
+      await task.destroy().catch(() => {});
     }
-  } finally {
-    await task.destroy();
+  } catch (e) {
+    console.warn("HR signature block lookup failed; using footer stamp:", e instanceof Error ? e.message : e);
   }
 }
 // Fingerprint of the retired, unfilled demo PDF. An uploaded filename is not evidence of its contents.

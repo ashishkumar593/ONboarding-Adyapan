@@ -4,12 +4,16 @@ const repository = path.resolve(__dirname, "..");
 const config: NextConfig = {
   turbopack: { root: repository },
   outputFileTracingRoot: repository,
-  outputFileTracingIncludes: { "/api/*": ["./policies/*.pdf"] },
+  outputFileTracingIncludes: {
+    "/api/*": [
+      "./policies/*.pdf",
+      "./node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs",
+    ],
+  },
   poweredByHeader: false,
   serverExternalPackages: [
     "pg",
     "nodemailer",
-    "@aws-sdk/client-s3",
     "exceljs",
     "pdfjs-dist",
     "yauzl",

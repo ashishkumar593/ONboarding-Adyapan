@@ -36,7 +36,7 @@ function error(e: unknown) {
   if (e instanceof Problem) return json({ error: e.message }, e.status);
   console.error(
     "Portal request failed",
-    e instanceof Error ? e.name : "Unknown",
+    e instanceof Error ? `${e.name}: ${e.message}` : "Unknown",
   );
   return json(
     { error: "The server could not finish this request. Please try again." },
