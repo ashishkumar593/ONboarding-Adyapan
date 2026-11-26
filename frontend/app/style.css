@@ -265,6 +265,46 @@ footer {
 footer i {
   margin: 0 6px;
 }
+body:has(> .workspace-loading) {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+.workspace-loading {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+.workspace-loading-status {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  color: var(--green);
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+.workspace-loading-mark {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 58px;
+  height: 58px;
+}
+.workspace-loading-mark::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 2px solid var(--line);
+  border-top-color: var(--green);
+  border-right-color: var(--gold);
+  border-radius: 50%;
+  animation: workspace-loading-turn 1.4s linear infinite;
+}
+@keyframes workspace-loading-turn {
+  to { transform: rotate(1turn); }
+}
 .narrow {
   width: min(680px, calc(100% - 36px));
   margin: 0 auto 48px;

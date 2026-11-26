@@ -83,6 +83,16 @@ export default function Workspace() {
   const received = inv && rosterGroup(inv) === "received";
   const reviewDocuments = inv ? [...inv.requirements, ...inv.policies.map(signedPolicySlot)
     .filter(slot => inv.files.some(file => file.slot === slot.id))] : [];
+  if (loading) return (
+    <main className="workspace-loading">
+      <div className="workspace-loading-status" role="status">
+        <span className="workspace-loading-mark" aria-hidden="true">
+          <img src="/adyapan.png" alt="" width={36} height={36} />
+        </span>
+        Loading workspace…
+      </div>
+    </main>
+  );
   return (
     <main className={rows ? "shell hr-main" : "narrow"}>
       {error && (
@@ -95,9 +105,7 @@ export default function Workspace() {
           {notice}
         </p>
       )}
-      {loading ? (
-        <p>Loading workspace…</p>
-      ) : rows === null ? (
+      {rows === null ? (
         <section className="panel verify">
           <div className="large-icon">
             <ShieldCheck />
@@ -113,7 +121,8 @@ export default function Workspace() {
               const data = new FormData(e.currentTarget);
               void run(async () => {
                 await request("hr-login", data);
-                await list();
+                  setLoading(true);
+                  try { await list(); } finally { setLoading(false); }
               });
             }}
           >
