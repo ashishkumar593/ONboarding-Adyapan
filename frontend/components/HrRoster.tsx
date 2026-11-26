@@ -107,7 +107,7 @@ export default function HrRoster({
           aria-pressed={group !== "received"}
           onClick={() => change("awaiting")}
         >
-          <Mail size={22} />
+          <Mail size={16} />
           <span>Intern roster</span>
           <b>{rows.length - received.length}</b>
         </button>}
@@ -116,7 +116,7 @@ export default function HrRoster({
           aria-pressed={group === "received"}
           onClick={() => change("received")}
         >
-          <FileCheck2 size={22} />
+          <FileCheck2 size={16} />
           <span>Documents received</span>
           <b>{received.length}</b>
         </button>}

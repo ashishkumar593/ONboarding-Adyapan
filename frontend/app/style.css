@@ -7,6 +7,13 @@
   --gold: #efc77e;
   --serif: "DM Serif Display", Georgia, serif;
   --mono: "IBM Plex Mono", monospace;
+  --control-height: 30px;
+  --control-font: 0.8125rem;
+}
+@media (pointer: coarse) {
+  :root {
+    --control-height: 44px;
+  }
 }
 * {
   box-sizing: border-box;
@@ -141,9 +148,7 @@ footer {
 }
 .hr-link,
 .secondary {
-  padding: 9px 15px;
   border: 1px solid #c9cec3;
-  border-radius: 7px;
   background: #fffef9;
 }
 .crumb {
@@ -174,21 +179,31 @@ footer i {
 }
 .button,
 .secondary,
+.hr-link,
 .upload-label {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 9px;
+  gap: 6px;
+  width: fit-content;
+  max-width: 100%;
+  min-height: var(--control-height);
+  padding: 4px 10px;
+  border-radius: 6px;
   font-weight: 600;
-  font-size: 0.91rem;
+  font-size: var(--control-font);
+  line-height: 1.3;
   text-decoration: none;
+}
+:is(.button, .secondary, .hr-link, .upload-label, .help) > svg {
+  flex: none;
+  width: 15px;
+  height: 15px;
 }
 .button {
   background: var(--green);
   border: 1px solid var(--green);
   color: white;
-  border-radius: 7px;
-  padding: 12px 19px;
 }
 .button:hover,
 .secondary:hover,
@@ -315,11 +330,14 @@ fieldset label {
 .panel .row {
   margin-top: 14px;
 }
+.help, .textbtn, .icon {
+  min-height: var(--control-height);
+}
 .textbtn {
-  font-size: 0.9rem;
+  font-size: var(--control-font);
   text-decoration: underline;
   text-underline-offset: 3px;
-  padding: 7px 0;
+  padding: 4px 0;
 }
 .error,
 .notice {
@@ -364,8 +382,9 @@ fieldset label {
   background: none;
   border: 1px solid transparent;
   border-radius: 6px;
-  padding: 9px;
-  font-size: 0.85rem;
+  min-height: var(--control-height);
+  padding: 4px 9px;
+  font-size: var(--control-font);
 }
 .stepnav [aria-current] {
   color: var(--green);
@@ -410,11 +429,7 @@ small {
 .upload-label {
   position: relative;
   cursor: pointer;
-  padding: 7px 13px;
   border: 1px solid #c2cbb9;
-  border-radius: 5px;
-  display: flex;
-  width: max-content;
   margin: 9px 0;
 }
 .upload-label input {
@@ -422,6 +437,7 @@ small {
   inset: 0;
   width: 100%;
   height: 100%;
+  min-height: 0;
   opacity: 0;
   cursor: pointer;
 }
@@ -480,6 +496,24 @@ hr {
 .hr-main {
   margin-bottom: 50px;
   min-height: 65vh;
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+.hr-main h1 {
+  font-size: clamp(1.75rem, 2.5vw, 2.125rem);
+  margin: 5px 0 10px;
+}
+.hr-main .panel {
+  padding: clamp(16px, 1.6vw, 24px);
+}
+.hr-main .panel h2 {
+  font-size: clamp(1.375rem, 1.8vw, 1.625rem);
+}
+.hr-main .panel h3 {
+  font-size: 1rem;
+}
+.hr-main label, .hr-main legend, .hr-main table {
+  font-size: 0.84375rem;
 }
 .hr-grid {
   display: grid;
@@ -584,7 +618,8 @@ hr {
   flex-wrap: wrap;
 }
 .icon {
-  padding: 7px;
+  min-width: var(--control-height);
+  padding: 4px;
   display: grid;
   place-items: center;
 }
@@ -652,9 +687,7 @@ dialog p {
   .header-inner nav a {
     font-size: 0.77rem;
   }
-  .hr-link {
-    padding: 7px 9px;
-  }
+  .hr-link { padding-inline: 8px; }
   .crumb {
     margin: 17px 0 13px;
   }
@@ -673,13 +706,10 @@ dialog p {
     grid-row: 1;
   }
   .stepnav button {
-    padding: 7px 5px;
+    padding-inline: 5px;
   }
   .hr-main .row.between {
     align-items: flex-start;
-  }
-  .secondary {
-    padding: 8px 10px;
   }
   .summary-box {
     display: grid;
@@ -779,33 +809,40 @@ dialog p {
 }
 
 .roster-tabs {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
-  margin: 6px 0 22px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  border-bottom: 1px solid var(--line);
+  margin: 2px 0 12px;
 }
 .roster-tabs button {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 12px;
-  padding: 18px 20px;
-  text-align: left;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: #fffefa;
+  min-height: var(--control-height);
+  gap: 6px;
+  padding: 4px 7px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  font-size: var(--control-font);
+  line-height: 1.3;
   font-weight: 600;
 }
+.roster-tabs button:hover { background: #edf1e8; }
 .roster-tabs button[aria-pressed="true"] {
-  background: var(--green);
-  color: #fffaf0;
-  border-color: var(--green);
+  color: var(--green);
+  border-bottom-color: var(--green);
 }
 .roster-tabs b {
-  margin-left: auto;
-  font: 500 0.85rem var(--mono);
-  border: 1px solid currentColor;
-  border-radius: 6px;
-  padding: 3px 8px;
+  font: 500 0.7rem/1.45 var(--mono);
+  border-radius: 9px;
+  padding: 0 5px;
+  background: #e9ece4;
+}
+.roster-tabs [aria-pressed="true"] b {
+  color: white;
+  background: var(--green);
 }
 .roster-panel h2 {
   margin-bottom: 6px;
@@ -817,8 +854,36 @@ dialog p {
   margin: 4px 0 12px;
 }
 .roster-panel .row {
-  gap: 9px;
+  gap: 7px;
   margin: 0;
+}
+.roster-panel .qr-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-content: center;
+  gap: 4px 16px;
+  text-align: start;
+  background: var(--paper);
+}
+.roster-panel .qr-card .qr {
+  grid-area: 1 / 1 / span 4;
+  align-self: center;
+  width: 124px;
+}
+.roster-panel .qr-card > :not(.qr) { grid-column: 2; }
+.roster-panel .qr-card p { margin: 0; }
+.roster-panel .qr-card .row {
+  justify-content: flex-start;
+  margin-top: 4px;
+}
+@media (max-width: 540px) {
+  .roster-panel .qr-card {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+  }
+  .roster-panel .qr-card .qr { align-self: flex-start; }
 }
 .roster-panel .roster-import {
   border: 1px solid var(--line);
@@ -926,24 +991,21 @@ dialog p {
 }
 .roster-paging select {
   width: auto;
+  min-height: var(--control-height);
+  padding: 4px 8px;
 }
 .delivery-choice label {
   min-height: 30px;
 }
 @media (max-width: 660px) {
   .roster-tabs {
-    gap: 8px;
+    column-gap: 4px;
   }
   .roster-tabs button {
-    padding: 12px 10px;
-    gap: 6px;
-    font-size: 0.84rem;
+    padding-inline: 6px;
   }
   .roster-tabs svg {
     display: none;
-  }
-  .roster-tabs b {
-    padding: 2px 5px;
   }
   .roster td,
   .roster th {
