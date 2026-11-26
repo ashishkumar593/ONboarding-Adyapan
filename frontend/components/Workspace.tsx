@@ -259,6 +259,7 @@ export default function Workspace() {
                   <dl className="review-list">
                     {Object.entries({
                       ...profileValues(inv),
+                      ...(inv.reference ? { "Submission reference": inv.reference } : {}),
                       ...(inv.draft.address
                         ? { Address: inv.draft.address }
                         : {}),

@@ -516,7 +516,7 @@ test("HR invitation, phone onboarding, correction and idempotent PDF issuance", 
   ).toBeVisible();
   await intern.getByRole("button", { name: "Refresh status" }).click();
   const download = intern.getByRole("link", {
-    name: "Download signed offer letter",
+    name: "Download stamped offer letter",
   });
   await expect(download).toBeVisible();
   const issuedRecord = await (await intern.request.get("/api/application")).json();
@@ -528,6 +528,31 @@ test("HR invitation, phone onboarding, correction and idempotent PDF issuance", 
   expect(savedOffer.suggestedFilename()).toBe(receipt.reference + "-signed-offer.pdf");
   expect(await savedOffer.failure()).toBeNull();
   const bytes = await fs.readFile(await savedOffer.path());
+  const returningContext = await browser.newContext({ baseURL: origin });
+  const statusPage = await returningContext.newPage();
+  try {
+    await statusPage.goto("/apply");
+    await statusPage.getByLabel("Registered email address").fill(email);
+    await statusPage.getByRole("button", { name: "Continue", exact: true }).click();
+    const letter = statusPage.getByRole("region", { name: "Stamped offer letter" });
+    await expect(letter).toBeVisible();
+    await letter.getByLabel("Submission reference").fill("ADY-000000000000");
+    await letter.getByRole("button", { name: "View stamped offer letter" }).click();
+    await expect(letter.getByRole("alert")).toContainText("Check the submission reference");
+    await expect(letter.getByTitle("Stamped offer letter preview")).toHaveCount(0);
+    await letter.getByLabel("Submission reference").fill(receipt.reference.toLowerCase());
+    await letter.getByRole("button", { name: "View stamped offer letter" }).click();
+    const returnedPdf = letter.getByTitle("Stamped offer letter preview");
+    await expect(returnedPdf).toBeVisible();
+    const downloadLink = letter.getByRole("link", { name: "Download stamped offer letter" });
+    await expect(downloadLink).toHaveAttribute("href", await returnedPdf.getAttribute("src"));
+    const [copy] = await Promise.all([statusPage.waitForEvent("download"), downloadLink.click()]);
+    expect(copy.suggestedFilename()).toBe(receipt.reference + "-signed-offer.pdf");
+    expect(await fs.readFile(await copy.path())).toEqual(bytes);
+    expect((await statusPage.request.get("/api/file?id=" + signed.id)).status()).toBe(401);
+  } finally {
+    await returningContext.close();
+  }
   const logout = await hr.request.post("/api/logout", {
     headers: { Origin: origin }, multipart: { hr: "1" },
   });
