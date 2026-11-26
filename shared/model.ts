@@ -1,4 +1,5 @@
 import requiredDocuments from "./intern-documents.json";
+export const sharedOnboardingUrl = "https://onbording.adyapan.com";
 export const termsAcknowledgement = "I have read and agree to the Confidentiality Agreement and the Liquidated Damages Addendum.";
 export type SigningPolicy = {
   title: string;

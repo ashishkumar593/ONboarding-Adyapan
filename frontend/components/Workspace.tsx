@@ -19,13 +19,12 @@ import {
 import HrRoster, { type RosterView } from "./HrRoster";
 import IssuedOffer from "./IssuedOffer";
 import type { Permission } from "@shared/hr";
-const initialView: RosterView = { group: "awaiting", search: "", page: 1, size: 10 };
+const initialView: RosterView = { group: "awaiting", search: "", year: "", month: "", page: 1, size: 10 };
 export default function Workspace() {
   const [permissions, setPermissions] = useState<Permission[]>([]);
   const [rows, setRows] = useState<RosterRow[] | null>(null),
     [inv, setInv] = useState<Invitation | null>(null),
-    [create, setCreate] = useState(false),
-    [origin, setOrigin] = useState("");
+    [create, setCreate] = useState(false);
   const [working, setWorking] = useState(false),
     [loading, setLoading] = useState(true),
     [error, setError] = useState(""),
@@ -37,7 +36,6 @@ export default function Workspace() {
     if (!me.permissions.includes("invite")) setView(v=>({...v,group:"received"}));
     const records: RosterRow[] = await request("list");
     setRows(records);
-    setOrigin((await request("origin")).origin);
     return records;
   }
   async function open(id: string) {
@@ -403,7 +401,6 @@ export default function Workspace() {
             </>
           ) : (
             <HrRoster
-              sharedUrl={origin ? new URL("/apply",origin).href : ""}
               permissions={permissions}
               rows={rows}
               view={view}

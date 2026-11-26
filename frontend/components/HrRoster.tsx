@@ -1,14 +1,13 @@
 "use client";
 import { useState } from "react";
 import { Download, FileCheck2, Mail, Plus, Upload } from "lucide-react";
-import { rosterGroup, statusDate, statuses, type RosterRow } from "@shared/model";
+import { rosterGroup, sharedOnboardingUrl, statusDate, statuses, type RosterRow } from "@shared/model";
 import { request, decodeFile, RequestError } from "./client";
 import type { ReceivedExport } from "@shared/received-export";
 export type RosterGroup = ReturnType<typeof rosterGroup>;
-export type RosterView = { group: RosterGroup; search: string; page: number; size: number };
+export type RosterView = { group: RosterGroup; search: string; year: string; month: string; page: number; size: number };
 import type { Permission } from "@shared/hr";
 type Props = {
-  sharedUrl: string;
   permissions: Permission[];
   rows: RosterRow[];
   view: RosterView;
@@ -25,8 +24,10 @@ const titles = {
   received: "Documents received",
 };
 const excelUrl = (group: string) => "/api/roster-xlsx?group=" + group;
+const months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+const indiaDate = new Intl.DateTimeFormat("sv-SE", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" });
+const receivedDay = (date: string | null) => date ? indiaDate.format(new Date(date)) : "";
 export default function HrRoster({
-  sharedUrl,
   permissions,
   rows,
   view,
@@ -38,15 +39,20 @@ export default function HrRoster({
   create,
   notify,
 }: Props) {
-  const { group, search, size } = view;
+  const { group, search, size, year, month } = view;
   const [importing,setImporting] = useState(false);
   const [progress,setProgress] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const canRemove = group === "awaiting" && permissions.includes("invite");
   const received = rows.filter(r=>rosterGroup(r)==="received");
+  const years = [...new Set(received.map(r => receivedDay(r.received_at).slice(0, 4)).filter(Boolean))].sort().reverse();
+  const filterQuery = new URLSearchParams({ year, month, search: search.trim() });
+  const receivedFilename = ["adyapan-documents-received", year, month].filter(Boolean).join("-");
   const matches = rows.filter(
     (r) =>
       rosterGroup(r) === group &&
+      (group !== "received" || ((!year || receivedDay(r.received_at).startsWith(year)) &&
+        (!month || receivedDay(r.received_at).slice(5, 7) === month))) &&
       [r.name, r.email, r.role, r.employee_id, r.reference]
         .join(" ")
         .toLowerCase()
@@ -54,6 +60,7 @@ export default function HrRoster({
   );
   const pages = Math.max(1, Math.ceil(matches.length / size));
   const page = Math.min(view.page, pages);
+  const exportDisabled = busy || !permissions.includes("export") || !matches.length;
   const offset = (page - 1) * size;
   const visible = matches.slice(offset, offset + size);
   const selectedRows = matches.filter(row => selected.has(row.id));
@@ -89,12 +96,12 @@ export default function HrRoster({
     notify("");
   }
   async function downloadRoster() {
-    const response = await fetch(excelUrl(group), {cache:"no-store"});
+    const response = await fetch(excelUrl(group) + (group === "received" ? "&" + filterQuery : ""), {cache:"no-store"});
     if (!response.ok) throw new RequestError((await response.json()).error, response.status);
     const url = URL.createObjectURL(await response.blob());
     const link = document.createElement("a");
     link.href = url;
-    link.download = "adyapan-" + group + ".xlsx";
+    link.download = (group === "received" ? receivedFilename : "adyapan-" + group) + ".xlsx";
     link.click();
     window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
   }
@@ -102,7 +109,7 @@ export default function HrRoster({
     setProgress("Preparing workbook");
     try {
       const { downloadZip } = await import("client-zip");
-      const bundle: ReceivedExport = await request("received-export");
+      const bundle: ReceivedExport = await request("received-export?" + filterQuery);
       async function* entries() {
         yield { name: "Documents received.xlsx", input: decodeFile(bundle.workbook) };
         yield* bundle.records;
@@ -118,7 +125,7 @@ export default function HrRoster({
       const url = URL.createObjectURL(archive);
       const link = document.createElement("a");
       link.href = url;
-      link.download = "adyapan-documents-received.zip";
+      link.download = receivedFilename + ".zip";
       link.click();
       window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
       notify("Export ready. Extract the ZIP and open Documents received.xlsx.");
@@ -156,7 +163,9 @@ export default function HrRoster({
             </h2>
             <p>
               {group === "received"
-                ? "Open a submission to review it, or export the workbook and uploaded files together as a ZIP."
+                ? permissions.includes("export")
+                  ? "Export matching submissions with document links, or download a ZIP with the files included."
+                  : "Open a submission to review it. Downloads of the full list require HR export permission."
                 : "Import the Excel sheet to give listed interns access."}
             </p>
           </div>
@@ -178,17 +187,21 @@ export default function HrRoster({
                 </button>
               </>
             )}
-            {permissions.includes("export") && (group === "received" ? (
-              <button className="secondary" disabled={busy} onClick={() => run(downloadReceived)}>
+            {group === "received" ? (<>
+              <button className="button" disabled={exportDisabled} onClick={() => run(downloadRoster)}>
+                <Download size={16} />
+                Export Excel
+              </button>
+              <button className="secondary" disabled={exportDisabled} onClick={() => run(downloadReceived)}>
                 <Download size={16} />
                 Export Excel + documents
               </button>
-            ) : (
+            </>) : permissions.includes("export") && (
               <a className="secondary" href={excelUrl(group)} download onClick={e=>{ e.preventDefault(); void run(downloadRoster); }}>
                 <Download size={16} />
                 Export Excel
               </a>
-            ))}
+            )}
           </div>
         </div>
         {importing && (
@@ -233,15 +246,15 @@ export default function HrRoster({
             </div>
           </section>
         )}
-        {group === "awaiting" && sharedUrl && <section className="panel qr-card">
+        {group === "awaiting" && <section className="panel qr-card">
           <h3>Shared onboarding link</h3>
           <p>Share this link or QR code with every intern on your roster.</p>
           <img className="qr" src="/api/qr" alt="Shared onboarding QR code" />
-          <a className="invite-url" href={sharedUrl}>{sharedUrl}</a>
+          <a className="invite-url" href={sharedOnboardingUrl}>{sharedOnboardingUrl}</a>
           <div className="row">
             <button className="secondary" onClick={()=>run(async()=>{
               if (navigator.clipboard) {
-                await navigator.clipboard.writeText(sharedUrl);
+                await navigator.clipboard.writeText(sharedOnboardingUrl);
                 notify("Onboarding link copied.");
               } else {
                 const link = document.querySelector(".invite-url");
@@ -269,6 +282,20 @@ export default function HrRoster({
             placeholder="Name, email or internship role"
           />
         </label>
+        {group === "received" && <div className="row received-date-filters">
+          <label>Received month
+            <select value={month} disabled={busy} onChange={e => setView({ ...view, month: e.target.value, page: 1 })}>
+              <option value="">All months</option>
+              {months.map((label, index) => <option key={label} value={String(index + 1).padStart(2, "0")}>{label}</option>)}
+            </select>
+          </label>
+          <label>Received year
+            <select value={year} disabled={busy} onChange={e => setView({ ...view, year: e.target.value, page: 1 })}>
+              <option value="">All years</option>
+              {years.map(y => <option key={y}>{y}</option>)}
+            </select>
+          </label>
+        </div>}
         {progress && <p role="status">{progress}…</p>}
         {canRemove && selectedRows.length > 0 && (
           <div className="row roster-selection">
@@ -318,7 +345,7 @@ export default function HrRoster({
                     <td><span className="badge">{statuses[r.status]}</span></td>
                     {canRemove && <td><button className="textbtn remove-action" aria-describedby={"roster-email-" + r.id}
                       disabled={busy} onClick={() => remove([r])}>Remove</button></td>}
-                    {group==="received" && <td>{r.received_at ? statusDate(r.received_at) : r.reference}</td>}
+                    {group==="received" && <td>{r.received_at ? statusDate(receivedDay(r.received_at)) : r.reference}</td>}
                   </tr>
                 ))}
               </tbody>
@@ -326,7 +353,7 @@ export default function HrRoster({
           </div>
         ) : (
           <p className="roster-empty">
-            {search
+            {group === "received" && (year || month) ? "No submissions match these filters." : search
               ? "No matching interns."
               : group === "received" ? "Submitted applications will appear here." : "Import an Excel sheet or add an intern to start."}
           </p>

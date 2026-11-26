@@ -1,4 +1,4 @@
-import { exportReceived } from "../services/received-export";
+import { exportReceived, signatureSvg } from "../services/received-export";
 import { roster, importRoster, exportRoster, removeFromRoster } from "../services/roster";
 import {
   verifyRosterEmail,
@@ -11,9 +11,11 @@ import {
 import { cookies } from "next/headers";
 import { NextRequest, NextResponse } from "next/server";
 import QRCode from "qrcode";
+import { sharedOnboardingUrl } from "@shared/model";
 import { auth, login, permit, assigned, requireFresh, logAccess, setLoginCookie } from "../services/auth";
 import {
   details,
+  demo,
   hash,
   pool,
   Problem,
@@ -128,23 +130,53 @@ export async function GET(req: NextRequest, ctx: Context) {
     }
     const staff = await auth(true);
     if (action === "me") return json({email:staff.staff,permissions:staff.permissions});
-    if (action === "received-export") {
+    if (action === "received-export" || (action === "roster-xlsx" && q.get("group") === "received")) {
       permit(staff,"export"); requireFresh(staff);
-      const bundle = await exportReceived(staff.staff);
-      await logAccess(staff,"export prepared",null,null,{files:bundle.files.length,scope:"assigned"});
-      return json(bundle);
+      const year = q.get("year") || "", month = q.get("month") || "";
+      requireThat(!year || /^\d{4}$/.test(year), "Select a valid year.");
+      requireThat(!month || /^(0[1-9]|1[0-2])$/.test(month), "Select a valid month.");
+      const standalone = action === "roster-xlsx";
+      const portal = demo() ? new URL(process.env.APP_ORIGIN || req.nextUrl.origin).origin : sharedOnboardingUrl;
+      const bundle = await exportReceived(staff.staff, year, month, q.get("search") || "", standalone ? portal : undefined);
+      await logAccess(staff,"export prepared",null,null,{files:bundle.files.length,scope:"assigned",year,month,standalone});
+      if (standalone) return new Response(new Uint8Array(bundle.workbook), {headers:{
+        "Content-Type":"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "Content-Disposition":'attachment; filename="adyapan-documents-received.xlsx"',
+        "Cache-Control":"private, no-store",
+      }});
+      return json({ ...bundle, workbook: Buffer.from(bundle.workbook).toString("base64") });
+    }
+    if (action === "received-export-record") {
+      permit(staff,"export"); requireFresh(staff);
+      const id = uuid(q.get("id"));
+      const record = (await pool.query(
+        `SELECT s.snapshot,s.invitation FROM submissions s JOIN hr_assignments a ON a.invitation=s.invitation
+         JOIN invitations i ON i.id=s.invitation WHERE s.id=$1 AND a.staff=$2 AND i.status <> 'removed'
+         AND (i.reference IS NOT NULL OR i.status IN ('submitted','correction','issued'))`, [id,staff.staff],
+      )).rows[0];
+      requireThat(record, "Submission unavailable.", 404);
+      await logAccess(staff,"exported declaration opened",record.invitation,null,{submission:id});
+      if (!q.has("drawing")) return json(record.snapshot);
+      const svg = signatureSvg(record.snapshot.drawing);
+      requireThat(svg, "Drawn signature unavailable.", 404);
+      return new Response(svg, {headers:{"Content-Type":"image/svg+xml","Content-Security-Policy":"sandbox; default-src 'none'","Cache-Control":"private, no-store"}});
     }
     if (action === "received-export-file") {
       permit(staff,"export"); requireFresh(staff);
       const id = uuid(q.get("id"));
       const file = await pool.query(
-        `SELECT f.invitation FROM files f JOIN invitations i ON i.id=f.invitation
-         JOIN hr_assignments a ON a.invitation=i.id AND a.staff=$2 WHERE f.id=$1 AND f.slot <> 'original' AND (i.reference IS NOT NULL OR i.status IN ('submitted','correction','issued'))`,
+        `SELECT f.invitation,f.mime,f.name FROM files f JOIN invitations i ON i.id=f.invitation
+         JOIN hr_assignments a ON a.invitation=i.id AND a.staff=$2 WHERE f.id=$1 AND f.slot <> 'original' AND i.status <> 'removed' AND (i.reference IS NOT NULL OR i.status IN ('submitted','correction','issued'))`,
         [id,staff.staff],
       );
       requireThat(file.rowCount, "This export document is unavailable.", 404);
       const bytes = await get(id);
       await logAccess(staff,"file exported",file.rows[0].invitation,id,{bytes:bytes.length});
+      if (q.get("open") === "1") return new Response(new Uint8Array(bytes), {headers:{
+        "Content-Type":file.rows[0].mime, "Cache-Control":"private, no-store",
+        "Content-Security-Policy":"sandbox; default-src 'none'",
+        "Content-Disposition":"inline; filename*=UTF-8''" + encodeURIComponent(file.rows[0].name).replace(/'/g,"%27"),
+      }});
       return json({ content: bytes.toString("base64") });
     }
     if (action === "list") return json(await roster(staff));
@@ -174,7 +206,7 @@ export async function GET(req: NextRequest, ctx: Context) {
     if (action === "qr") {
       permit(staff,"invite");
       const bytes = await QRCode.toBuffer(
-        new URL("/apply",process.env.APP_ORIGIN).href,
+        sharedOnboardingUrl,
         { width: 520, margin: 4 },
       );
       return new Response(new Uint8Array(bytes), {

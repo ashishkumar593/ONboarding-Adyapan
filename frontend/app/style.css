@@ -932,6 +932,13 @@ dialog p {
   margin: 16px 0;
   max-width: 490px;
 }
+.received-date-filters label {
+  margin: 0;
+}
+.received-date-filters select {
+  min-height: 34px;
+  padding: 5px 10px;
+}
 .roster-batch {
   margin: 18px 0;
 }

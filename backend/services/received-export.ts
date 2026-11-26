@@ -1,5 +1,4 @@
 import ExcelJS from "exceljs";
-import type { ReceivedExport } from "@shared/received-export";
 import { pool } from "./db";
 import { signedPolicySlot, statuses, type Invitation, type Doc } from "@shared/model";
 import { signingPolicies } from "./signing-policies";
@@ -9,8 +8,10 @@ type ReceivedRecord = Pick<Invitation,
   "id" | "name" | "email" | "role" | "starts" | "ends" | "status" |
   "draft" | "reference" | "requirements" | "correction"
 > & {
+  received_local: string | null;
   uploads: (Doc & { created_at: string })[];
   submissions: {
+    id: string;
     created_at: string;
     snapshot: { agreed?: boolean; signature?: string; signatureMode?: string;
       terms?: string; version?: string; drawing?: unknown; acceptedAt?: string; files?: string[] };
@@ -28,24 +29,35 @@ function sheet(workbook: ExcelJS.Workbook, name: string, columns: [string, numbe
   return page;
 }
 
-export async function exportReceived(staff: string): Promise<ReceivedExport> {
+export function signatureSvg(drawing: unknown) {
+  if (!validDrawing(drawing)) return;
+  const strokes = drawing.map(points =>
+    '<polyline points="' + points.map(point => point.join(",")).join(" ") + '"/>').join("");
+  return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 300"><g fill="none" stroke="black" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">' + strokes + '</g></svg>';
+}
+
+export async function exportReceived(staff: string, year: string, month: string, search: string, portal?: string) {
   // Read related metadata in one database snapshot. Stored file IDs are immutable.
   const { rows } = await pool.query<ReceivedRecord>(`
     SELECT i.id,i.name,i.email,i.role,i.starts,i.ends,i.status,i.draft,i.reference,
-      i.requirements,i.correction,
+      i.requirements,i.correction,to_char(d.received,'YYYY-MM-DD"T"HH24:MI:SS') AS received_local,
       ARRAY(SELECT to_jsonb(f) FROM files f WHERE f.invitation=i.id AND f.slot <> 'original'
             ORDER BY f.created_at,f.id) AS uploads,
-      ARRAY(SELECT jsonb_build_object('created_at',s.created_at,'snapshot',s.snapshot)
+      ARRAY(SELECT jsonb_build_object('id',s.id,'created_at',s.created_at,'snapshot',s.snapshot)
             FROM submissions s WHERE s.invitation=i.id ORDER BY s.created_at,s.id) AS submissions
     FROM invitations i
     JOIN hr_assignments a ON a.invitation=i.id AND a.staff=$1
-    WHERE (i.reference IS NOT NULL OR i.status IN ('submitted','correction','issued'))
-    ORDER BY i.name,i.id`,[staff]);
+    CROSS JOIN LATERAL (SELECT max(created_at) AT TIME ZONE 'Asia/Kolkata' AS received FROM submissions WHERE invitation=i.id) d
+    WHERE i.status <> 'removed' AND (i.reference IS NOT NULL OR i.status IN ('submitted','correction','issued'))
+      AND ($2='' OR to_char(d.received,'YYYY')=$2) AND ($3='' OR to_char(d.received,'MM')=$3)
+      AND strpos(lower(concat_ws(' ',coalesce(nullif(i.draft->>'name',''),i.name),i.email,i.role,
+        coalesce(i.draft->>'employeeId',''),coalesce(i.reference,''))),lower($4))>0
+    ORDER BY i.name,i.id`,[staff, year, month, search.trim()]);
 
   const book = new ExcelJS.Workbook();
   const interns = sheet(book, "Documents received", [
     ["Name", 26], ["Email", 34], ["Role", 26], ["Start date", 16], ["End date", 16],
-    ["Status", 22], ["Employee ID", 18], ["Submission reference", 24], ["Documents received (UTC)", 28],
+    ["Status", 22], ["Employee ID", 18], ["Submission reference", 24], ["Documents received (IST)", 28],
     ["Phone", 20], ["College", 32], ["Address", 34], ["Course", 26], ["Graduation year", 20],
     ["Correction requested", 42], ["Files", 12],
   ]);
@@ -65,35 +77,37 @@ export async function exportReceived(staff: string): Promise<ReceivedExport> {
 
   const files: { path: string; id: string; bytes: number }[] = [];
   const records: { name: string; input: string }[] = [];
+  const documentColumns = new Map<string, number>();
   for (const record of rows) {
     const { draft, uploads, submissions } = record;
     const name = draft.name || record.name;
     const ref = record.reference || record.id;
     const folder = "documents/" + (/^ADY-[0-9A-F]+$/.test(ref) ? ref : record.id);
-    const latest = submissions.at(-1);
-    interns.addRow([
+    // Excel dates have no time zone. Store the same wall-clock time used by the filters.
+    const receivedDate = record.received_local && new Date(record.received_local + "Z");
+    const internRow = interns.addRow([
       name, record.email, record.role, new Date(record.starts), new Date(record.ends),
-      statuses[record.status] || record.status, draft.employeeId, ref, latest && new Date(latest.created_at),
+      statuses[record.status] || record.status, draft.employeeId, ref, receivedDate,
       draft.phone, draft.college, draft.address, draft.course, draft.year, record.correction?.message, uploads.length,
     ]);
     const versions = new Map<string, number[]>();
-    submissions.forEach(({ snapshot, created_at }, index) => {
+    submissions.forEach(({ id, snapshot, created_at }, index) => {
       const version = index + 1;
       const base = folder + "/submission-" + version;
       for (const id of snapshot.files || []) versions.set(id, [...(versions.get(id) || []), version]);
-      records.push({ name: base + ".json", input: JSON.stringify(snapshot, null, 2) });
+      if (!portal) records.push({ name: base + ".json", input: JSON.stringify(snapshot, null, 2) });
+      const recordLink = portal ? portal + "/api/received-export-record?id=" + id : base + ".json";
       let signature;
-      if (validDrawing(snapshot.drawing)) {
-        const strokes = snapshot.drawing.map(points =>
-          '<polyline points="' + points.map(point => point.join(",")).join(" ") + '"/>').join("");
-        records.push({ name: base + ".svg", input: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 300"><g fill="none" stroke="black" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">' + strokes + '</g></svg>' });
-        signature = { text: "View signature", hyperlink: base + ".svg" };
+      const svg = signatureSvg(snapshot.drawing);
+      if (svg) {
+        if (!portal) records.push({ name: base + ".svg", input: svg });
+        signature = { text: "View signature", hyperlink: portal ? recordLink + "&drawing=1" : base + ".svg" };
       }
       declarations.addRow([
         ref, name, version, new Date(snapshot.acceptedAt || created_at),
         snapshot.agreed == null ? "" : snapshot.agreed ? "Yes" : "No",
         snapshot.version, snapshot.terms, snapshot.signature, snapshot.signatureMode,
-        signature, { text: "Open signed record", hyperlink: base + ".json" },
+        signature, { text: "Open signed record", hyperlink: recordLink },
       ]);
     });
     for (const [index, file] of uploads.entries()) {
@@ -102,13 +116,26 @@ export async function exportReceived(staff: string): Promise<ReceivedExport> {
         (file.slot === "issued" ? "Issued offer" : file.slot);
       const extension = file.mime === "application/pdf" ? "pdf" : file.mime === "image/png" ? "png" : "jpg";
       const path = folder + "/" + (index + 1) + "-" + label.replace(/[^a-zA-Z0-9_-]+/g, "-").slice(0, 60) + "." + extension;
-      documents.addRow([ref, name, label, { text: file.name, hyperlink: path },
+      const link = { text: file.name, hyperlink: portal ? portal + "/api/received-export-file?id=" + file.id + "&open=1" : path };
+      documents.addRow([ref, name, label, link,
         new Date(file.created_at), file.bytes, versions.get(file.id)?.join(", "), file.id]);
+      if (portal) {
+        if (!documentColumns.has(file.slot)) {
+          const column = interns.getColumn(17 + documentColumns.size);
+          column.header = label;
+          column.width = 36;
+          column.font = { color: {argb:"FF17583E"}, underline:true };
+          interns.getRow(1).getCell(column.number).style = interns.getRow(1).getCell(1).style;
+          documentColumns.set(file.slot, column.number);
+        }
+        // Uploads are ordered oldest first, so the summary links to the latest version.
+        internRow.getCell(documentColumns.get(file.slot)!).value = link;
+      }
       files.push({ path, id: file.id, bytes: file.bytes });
     }
   }
   for (const page of book.worksheets) {
     page.autoFilter = { from: "A1", to: { row: page.rowCount, column: page.columnCount } };
   }
-  return { workbook: Buffer.from(await book.xlsx.writeBuffer()).toString("base64"), files, records };
+  return { workbook: await book.xlsx.writeBuffer(), files, records };
 }

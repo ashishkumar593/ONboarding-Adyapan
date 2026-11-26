@@ -49,13 +49,12 @@ export async function removeFromRoster(ids: string[], user: StaffSession) {
 export async function exportRoster(group: string, user: StaffSession) {
   if (group === "pending") group = "awaiting";
   requireThat(
-    ["awaiting", "received", "template"].includes(group),
+    ["awaiting", "template"].includes(group),
     "Select a list to export.",
   );
   const workbook = new ExcelJS.Workbook();
   const titles: Record<string, string> = {
     awaiting: "Intern roster",
-    received: "Documents received",
     template: "Intern roster",
   };
   const sheet = workbook.addWorksheet(titles[group], {
@@ -69,13 +68,6 @@ export async function exportRoster(group: string, user: StaffSession) {
   if (group !== "template") {
     sheet.getColumn(6).header = "Status";
     sheet.getColumn(6).width = 24;
-    if (group === "received") {
-      ["Employee ID", "Submission reference", "Documents received (UTC)"].forEach((name, i) => {
-        sheet.getColumn(i + 7).header = name;
-        sheet.getColumn(i + 7).width = 26;
-      });
-      sheet.getColumn(9).numFmt = "yyyy-mm-dd hh:mm";
-    }
     for (const row of (await roster(user)).filter(
       (row) => rosterGroup(row) === group,
     )) {
@@ -87,8 +79,6 @@ export async function exportRoster(group: string, user: StaffSession) {
         new Date(row.ends + "T00:00:00Z"),
         statuses[row.status],
       ];
-      if (group === "received")
-        values.push(row.employee_id || "", row.reference || "", row.received_at ? new Date(row.received_at) : "");
       sheet.addRow(values);
     }
   }

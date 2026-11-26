@@ -207,7 +207,11 @@ test("HR invitation, phone onboarding, correction and idempotent PDF issuance", 
     png.height,
   ).data;
   expect(link).toBe(await hr.locator(".invite-url").getAttribute("href"));
-  expect(link).toBe(origin + "/apply");
+  expect(link).toBe("https://onbording.adyapan.com");
+  await expect(hr.getByRole("link", {name:"Download QR"})).toHaveAttribute("href", qrUrl);
+  await hr.context().grantPermissions(["clipboard-read", "clipboard-write"], {origin});
+  await hr.getByRole("button", {name:"Copy link"}).click();
+  await expect.poll(() => hr.evaluate(() => navigator.clipboard.readText())).toBe(link);
   const inviteId = (await (await hr.request.get("/api/list")).json()).find(r=>r.email===email).id;
   const createSecond = await hr.request.post(origin + "/api/add-intern", {
     headers: { Origin: origin },
@@ -233,7 +237,8 @@ test("HR invitation, phone onboarding, correction and idempotent PDF issuance", 
       baseURL: origin,
     }),
     phone = await first.newPage();
-  await phone.goto(link);
+  await phone.goto(new URL(link).pathname);
+  await phone.getByRole("link", {name:"Start onboarding"}).click();
   await phone.getByLabel("Registered email address").fill(email);
   await phone.getByRole("button",{name:"Continue",exact:true}).click();
   await expect(phone.getByRole("heading",{name:"Your application"})).toBeVisible();
@@ -291,7 +296,8 @@ test("HR invitation, phone onboarding, correction and idempotent PDF issuance", 
       baseURL: origin,
     }),
     intern = await second.newPage();
-  await intern.goto(link);
+  await intern.goto(new URL(link).pathname);
+  await intern.getByRole("link", {name:"Start onboarding"}).click();
   const numberOfMessages = (await messages()).length;
   for (const address of ["uninvited@example.test", "absent@example.test"]) {
     await intern.getByLabel("Registered email address").fill(address);
@@ -438,6 +444,28 @@ test("HR invitation, phone onboarding, correction and idempotent PDF issuance", 
   expect(receipt.reference).toMatch(/^ADY-/);
   await hr.reload();
   await hr.getByRole("button",{name:/Documents received/}).click();
+  const [excelDownload] = await Promise.all([
+    hr.waitForEvent("download"),
+    hr.getByRole("button", { name: "Export Excel", exact: true }).click(),
+  ]);
+  expect(excelDownload.suggestedFilename()).toBe("adyapan-documents-received.xlsx");
+  const excel = new (require("exceljs").Workbook)();
+  await excel.xlsx.readFile(await excelDownload.path());
+  const profile = excel.getWorksheet("Documents received");
+  expect(profile.getCell("K2").value).toBe("Sample University");
+  const documentLinks = excel.getWorksheet("Uploaded documents").getRows(2, 9);
+  for (const row of documentLinks) {
+    const url = row.getCell(4).value.hyperlink;
+    const column = profile.getRow(1).values.indexOf(row.getCell(3).value);
+    expect(profile.getRow(2).getCell(column).value.hyperlink).toBe(url);
+    expect(new URL(url).origin).toBe(origin);
+    const response = await hr.request.get(url);
+    expect(response.headers()["content-type"]).toBe("application/pdf");
+    expect((await response.body()).subarray(0, 5).toString()).toBe("%PDF-");
+  }
+  const signedRecord = excel.getWorksheet("Signed declarations").getRow(2);
+  expect(await (await hr.request.get(signedRecord.getCell(11).value.hyperlink)).json()).toEqual(firstSubmission);
+  expect(await (await hr.request.get(signedRecord.getCell(10).value.hyperlink)).text()).toContain("<polyline");
   const [bundleDownload] = await Promise.all([
     hr.waitForEvent("download", { timeout: 8000 }),
     hr.getByRole("button", { name: "Export Excel + documents" }).click(),
@@ -742,10 +770,11 @@ test("Excel import enables multiple registered interns through one shared link",
   expect(pendingBook.worksheets[0].getColumn(2).values).toContain(
     people[2].email,
   );
-  const sharedLink=await page.getByRole("link",{name:origin+"/apply"}).getAttribute("href");
+  const sharedLink=await page.getByRole("link",{name:"https://onbording.adyapan.com",exact:true}).getAttribute("href");
   for(const person of people){
     const browser=await page.context().browser().newContext({baseURL:origin});
-    const intern=await browser.newPage(); await intern.goto(sharedLink);
+    const intern=await browser.newPage(); await intern.goto(new URL(sharedLink).pathname);
+    await intern.getByRole("link", {name:"Start onboarding"}).click();
     await intern.getByLabel("Registered email address").fill(person.email.toUpperCase());
     await intern.getByRole("button",{name:"Continue",exact:true}).click();
     await expect(intern.getByLabel("Email address")).toHaveValue(person.email);
@@ -762,7 +791,7 @@ test("Excel import enables multiple registered interns through one shared link",
   ).toHaveCount(0);
 });
 
-test("HR pages through invitation and received records", async ({ page }) => {
+test("HR pages through records and exports all submissions matching the received month and year", async ({ page }) => {
   const rows = ["queued", "submitted"].flatMap(status =>
     Array.from({ length: 12 }, (_, index) => ({
       id: crypto.randomUUID(), name: status + " intern " + (index + 1),
@@ -775,15 +804,27 @@ test("HR pages through invitation and received records", async ({ page }) => {
   await page.getByLabel("Work email").fill(hrEmail);
   await page.getByLabel("Access key",{exact:true}).fill(accessKey);
   await page.getByLabel("Password", { exact: true }).fill(password);
-  await page.route("**/api/list", route => route.fulfill({ json: rows }));
+  for (const r of rows) {
+    await db.query(`INSERT INTO invitations(id,token,name,email,role,starts,ends,status,reference,requirements)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'[]')`,
+      [r.id, crypto.randomUUID(), r.name, r.email, r.role, r.starts, r.ends, r.status, r.reference]);
+    await db.query("INSERT INTO hr_assignments(staff,invitation) VALUES($1,$2)", [hrEmail, r.id]);
+  }
+  const submitted = rows.filter(r => r.reference);
+  for (const [i, r] of submitted.entries()) {
+    const at = i < 6 ? "2040-03-31T18:35:00Z" : i < 10 ? "2040-03-31T18:25:00Z" : "2039-04-01T00:00:00Z";
+    await db.query("INSERT INTO submissions(id,invitation,snapshot,created_at) VALUES($1,$2,'{}',$3)", [crypto.randomUUID(), r.id, at]);
+  }
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await expect(page).toHaveTitle("Adyapan | Onboarding Portal");
   const tableRows = page.locator("tbody tr");
   const next = page.getByRole("button", { name: "Next", exact: true });
+  await page.getByLabel("Search interns").fill("queued intern");
   await expect(tableRows).toHaveCount(10);
   await next.click();
   await expect(tableRows).toHaveCount(2);
   await page.getByRole("button", { name: /Documents received/ }).click();
+  await page.getByLabel("Search submissions").fill("submitted intern");
   await expect(tableRows).toHaveCount(10);
   await page.getByLabel("Rows per page").selectOption("5");
   await next.click();
@@ -794,6 +835,23 @@ test("HR pages through invitation and received records", async ({ page }) => {
   await expect(tableRows).toHaveCount(1);
   await expect(tableRows).toContainText("submitted intern 3");
   await expect(page.getByText("Page 1 of 1", { exact: true })).toBeVisible();
+  await page.getByLabel("Search submissions").fill("submitted intern");
+  await page.getByLabel("Received month").selectOption("04");
+  await expect(page.getByText("1–5 of 8")).toBeVisible();
+  await page.getByLabel("Received year").selectOption("2040");
+  await expect(page.getByText("1–5 of 6")).toBeVisible();
+  await next.click();
+  await expect(page.getByText("6–6 of 6")).toBeVisible();
+  const [download] = await Promise.all([
+    page.waitForEvent("download"), page.getByRole("button", {name: "Export Excel", exact: true}).click(),
+  ]);
+  const book = new (require("exceljs").Workbook)();
+  await book.xlsx.readFile(await download.path());
+  expect(book.worksheets[0].getColumn(2).values.slice(2).sort()).toEqual(submitted.slice(0, 6).map(r => r.email).sort());
+  const filtered = await (await page.request.get("/api/received-export?month=04&year=2040&search=submitted2%40")).json();
+  expect(filtered.records).toHaveLength(1);
+  await page.getByLabel("Received month").selectOption("01");
+  await expect(page.getByRole("button", {name: "Export Excel", exact: true})).toBeDisabled();
 });
 test("HR removes individual interns and batches across roster pages", async ({page, playwright}) => {
   const post = (client, action, fields) => client.post("/api/" + action, {headers: {Origin: origin}, multipart: fields});
