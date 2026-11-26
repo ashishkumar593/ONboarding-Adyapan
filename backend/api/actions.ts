@@ -2,7 +2,7 @@ import { exportReceived } from "../services/received-export";
 import { roster, importRoster, exportRoster, removeFromRoster } from "../services/roster";
 import {
   verifyRosterEmail,
-  remembersBrowser,
+  rememberedDevice,
   rememberBrowser,
   redeemAccess,
   changeAccess,
@@ -11,10 +11,9 @@ import {
 import { cookies } from "next/headers";
 import { NextRequest, NextResponse } from "next/server";
 import QRCode from "qrcode";
-import { auth, login, permit, assigned, requireFresh, logAccess, setSession } from "../services/auth";
+import { auth, login, permit, assigned, requireFresh, logAccess, setLoginCookie } from "../services/auth";
 import {
   details,
-  demo,
   hash,
   pool,
   Problem,
@@ -32,8 +31,16 @@ import { readPolicyPdf, signingPolicies } from "../services/signing-policies";
 type Context = { params: Promise<{ action: string }> };
 const json = (body: unknown, status = 200) =>
   NextResponse.json(body, { status, headers: { "Cache-Control": "no-store" } });
+async function setInternCookies(session: { token: string; device: string; expires: Date }) {
+  await setLoginCookie("ady_intern", session.token, session.expires);
+  await setLoginCookie("ady_device", session.device, session.expires);
+}
 function error(e: unknown) {
   if (e instanceof Problem) return json({ error: e.message }, e.status);
+  if (e instanceof Error && "code" in e && e.code === "28P01") {
+    console.error("Database authentication failed (28P01). Check the deployed DATABASE_URL.");
+    return json({ error: "The portal cannot connect to the onboarding database. Please contact HR." }, 503);
+  }
   console.error(
     "Portal request failed",
     e instanceof Error ? `${e.name}: ${e.message}` : "Unknown",
@@ -55,6 +62,10 @@ export async function GET(req: NextRequest, ctx: Context) {
   try {
     const { action } = await ctx.params,
       q = req.nextUrl.searchParams;
+    if (action === "remembered-email") {
+      const device = await rememberedDevice(pool, (await cookies()).get("ady_device")?.value);
+      return json({ email: device?.email ?? "" });
+    }
     if (action === "application") {
       const user = await auth();
       const inv = await details(pool, user.invitation);
@@ -64,7 +75,8 @@ export async function GET(req: NextRequest, ctx: Context) {
         401,
       );
       const device = (await cookies()).get("ady_device")?.value;
-      return json({ ...inv, rememberedBrowser: await remembersBrowser(pool, inv.id, device) });
+      const remembered = await rememberedDevice(pool, device);
+      return json({ ...inv, rememberedBrowser: remembered?.invitation === inv.id });
     }
     if (action === "signing-policy") {
       await auth();
@@ -208,22 +220,23 @@ export async function POST(req: NextRequest, ctx: Context) {
     }).formData();
     if (action === "roster-login") {
       const device = (await cookies()).get("ady_device")?.value;
-      const sessionToken = await verifyRosterEmail(emailAddress(data), device);
-      if (!sessionToken) return json({ emailSent: true });
-      await setSession(sessionToken);
+      const session = await verifyRosterEmail(emailAddress(data), device);
+      if (!session) return json({ emailSent: true });
+      await setInternCookies(session);
       return json({ ok: true });
     }
     if (action === "redeem-link") {
-      const token = await redeemAccess(
+      const session = await redeemAccess(
         field(data, "token", 32),
         field(data, "access", 43),
+        (await cookies()).get("ady_device")?.value,
       );
-      await setSession(token);
+      await setInternCookies(session);
       return json({ ok: true });
     }
     if (action === "hr-login") {
       const token = await login(emailAddress(data), field(data,"password",256), field(data,"accessKey",256));
-      await setSession(token,true);
+      await setLoginCookie("ady_hr", token, new Date(Date.now() + 8 * 3600_000));
       return json({ok:true});
     }
     if (action === "logout") {
@@ -241,10 +254,7 @@ export async function POST(req: NextRequest, ctx: Context) {
       const jar = await cookies();
       const key = await rememberBrowser(user.invitation, jar.get("ady_intern")!.value,
         jar.get("ady_device")?.value, data.get("remember") === "yes");
-      if (key) jar.set("ady_device", key, {
-        httpOnly: true, sameSite: "lax", secure: !demo() || process.env.APP_ORIGIN?.startsWith("https://"),
-        path: "/", maxAge: 30 * 86400,
-      });
+      if (key) await setLoginCookie("ady_device", key.key, key.expires);
       else jar.delete("ady_device");
       return json({ rememberedBrowser: !!key });
     }

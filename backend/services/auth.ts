@@ -75,14 +75,6 @@ export async function logAccess(
     [staff.staff, action, invitation, file, detail],
   );
 }
-export async function session(db: PoolClient, invitation: string) {
-  const token = crypto.randomBytes(32).toString("hex");
-  await db.query(
-    "INSERT INTO sessions(digest,invitation,hr,expires,method) VALUES($1,$2,false,now()+interval '1 day','invitation')",
-    [hash(token), invitation],
-  );
-  return token;
-}
 const derive = promisify(crypto.scrypt);
 export async function login(email: string, password: string, key: string) {
   const token = await transaction(async (db) => {
@@ -138,12 +130,12 @@ export async function login(email: string, password: string, key: string) {
   requireThat(token, "Check your sign-in details.", 401);
   return token;
 }
-export async function setSession(token: string, hr = false) {
-  (await cookies()).set(hr ? "ady_hr" : "ady_intern", token, {
+export async function setLoginCookie(name: "ady_hr" | "ady_intern" | "ady_device", value: string, expires: Date) {
+  (await cookies()).set(name, value, {
     httpOnly: true,
     sameSite: "lax",
     secure: !demo() || process.env.APP_ORIGIN?.startsWith("https://"),
     path: "/",
-    maxAge: hr ? 28800 : 86400,
+    expires,
   });
 }

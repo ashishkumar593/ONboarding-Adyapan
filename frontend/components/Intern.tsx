@@ -68,9 +68,11 @@ export default function Intern({ token }: { token: string }) {
       }
       setAccess("");
       load(true)
-        .catch((e) => {
-          if (!(e instanceof RequestError && e.status === 401))
-            setError(e.message);
+        .catch(async (e) => {
+          if (e instanceof RequestError && e.status === 401) {
+            const hint = await request("remembered-email").catch(() => null);
+            setEmail(hint?.email ?? "");
+          } else setError(e.message);
         })
         .finally(() => setReady(true));
     }
@@ -242,7 +244,7 @@ export default function Intern({ token }: { token: string }) {
           ) : (
             <>
               {emailSent && <p className="notice" role="status">Check your invited inbox for a fresh personal link.</p>}
-              <p>Use the same registered email each time you sign in. On a new browser, check your inbox for a link to your saved application.</p>
+              <p>This browser remembers your registered email for 30 days from sign-in. You can sign out and return during that time. On a new browser or after 30 days, confirm your email to reopen your application.</p>
               <form
                 onSubmit={(e) => {
                   e.preventDefault();
@@ -363,7 +365,10 @@ export default function Intern({ token }: { token: string }) {
                   const data = new FormData(e.currentTarget);
                   data.set("invitation", inv.id);
                   void run(async () => {
-                    if (!inv.correction) setInv(await request("draft", data));
+                    if (!inv.correction) {
+                      const draft = await request("draft", data);
+                      setInv({ ...draft, rememberedBrowser: inv.rememberedBrowser });
+                    }
                     setStep(inv.correction ? 2 : 1);
                   });
                 }}
@@ -556,6 +561,7 @@ export default function Intern({ token }: { token: string }) {
             onClick={() =>
               run(async () => {
                 await request("logout", form({}));
+                setEmail(inv.rememberedBrowser ? inv.email : "");
                 setInv(null);
                 setAccess("");
                 setStep(0);

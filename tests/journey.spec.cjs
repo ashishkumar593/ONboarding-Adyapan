@@ -258,14 +258,32 @@ test("HR invitation, phone onboarding, correction and idempotent PDF issuance", 
   await expect(
     phone.getByRole("heading", { name: "Your documents" }),
   ).toBeVisible();
-  await phone.getByLabel("Remember this personal browser for 30 days").click();
   await expect(phone.getByLabel("Remember this personal browser for 30 days")).toBeChecked();
+  const device = (await first.cookies()).find(cookie => cookie.name === "ady_device");
+  expect(device.httpOnly).toBe(true);
+  expect(Math.abs(device.expires - Date.now() / 1000 - 30 * 86400)).toBeLessThan(60);
+  const deadline = (await db.query("SELECT expires FROM sessions WHERE invitation=$1 AND method='remember-browser'", [inviteId])).rows[0].expires;
+  const initialMailCount = (await messages()).length;
   for (let visit = 0; visit < 2; visit++) {
     await phone.getByRole("button", { name: "Sign out" }).click();
-    await phone.getByLabel("Registered email address").fill(email);
+    await expect(phone.getByLabel("Registered email address")).toHaveValue(email);
+    await phone.reload();
+    await expect(phone.getByLabel("Registered email address")).toHaveValue(email);
     await phone.getByRole("button", { name: "Continue", exact: true }).click();
     await expect(phone.getByRole("heading", { name: "Your documents" })).toBeVisible();
+    const internCookie = (await first.cookies()).find(cookie => cookie.name === "ady_intern");
+    expect(Math.abs(internCookie.expires - device.expires)).toBeLessThan(2);
+    const grants = await db.query("SELECT expires FROM sessions WHERE invitation=$1", [inviteId]);
+    expect(grants.rows.map(grant => grant.expires)).toEqual([deadline, deadline]);
   }
+  expect((await messages()).length).toBe(initialMailCount);
+  await db.query("UPDATE sessions SET expires=now()-interval '1 second' WHERE invitation=$1", [inviteId]);
+  await phone.reload();
+  await expect(phone.getByLabel("Registered email address")).toHaveValue("");
+  await phone.getByLabel("Registered email address").fill(email);
+  await phone.getByRole("button", { name: "Continue", exact: true }).click();
+  await expect(phone.getByText("Check your invited inbox for a fresh personal link.")).toBeVisible();
+  expect((await phone.request.get("/api/application")).status()).toBe(401);
   await first.close();
   const second = await browser.newContext({
       ...devices["iPhone 13"],

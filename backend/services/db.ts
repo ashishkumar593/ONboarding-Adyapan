@@ -5,10 +5,15 @@ import { signingPolicies } from "./signing-policies";
 import { currentRequirements, type Invitation } from "@shared/model";
 types.setTypeParser(1082, (value) => value);
 const globals = globalThis as typeof globalThis & { adyPool?: Pool };
-export const pool = (globals.adyPool ??= new Pool({
-  connectionString: process.env.DATABASE_URL,
-  max: 8,
-}));
+function createPool() {
+  const db = new Pool({ connectionString: process.env.DATABASE_URL, max: 8 });
+  // pg removes disconnected idle clients before emitting this event.
+  db.on("error", (error: Error & { code?: string }) => {
+    console.error("Idle database connection closed", error.code || error.name);
+  });
+  return db;
+}
+export const pool = (globals.adyPool ??= createPool());
 export async function transaction<T>(work: (db: PoolClient) => Promise<T>) {
   const db = await pool.connect();
   try {

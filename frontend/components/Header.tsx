@@ -64,7 +64,7 @@ export function Header() {
         <h3>How do I start?</h3>
         <p>Open the shared onboarding link or scan the QR from HR and enter your registered email.</p>
         <h3>Can I finish later?</h3>
-        <p>Yes. Reopen the shared link. If your session has expired, check your registered inbox to resume.</p>
+        <p>Yes. Reopen the shared link in the same browser within 30 days of signing in. If you signed out, continue with your remembered email. On a new browser or after 30 days, use the confirmation link sent to your registered inbox.</p>
         <h3>When is my letter ready?</h3>
         <p>
           People Operations will review your signed offer. You’ll receive an
