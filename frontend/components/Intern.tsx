@@ -19,6 +19,7 @@ import {
   profileValues,
   profileComplete,
   isResume,
+  isOptionalDocument,
   statusDate,
   statuses,
   type Slot,
@@ -143,7 +144,7 @@ export default function Intern({ token }: { token: string }) {
   const policyCorrection = policySlots.find(slot => slot.id === inv?.correction?.slot);
   const hasResume = inv?.files.some((f) => f.slot === resume?.id);
   const allFiles = inv?.requirements.every((r) =>
-    inv.files.some((f) => f.slot === r.id),
+    isOptionalDocument(r) || inv.files.some((f) => f.slot === r.id),
   );
   const corrected =
     !inv?.correction || !!policyCorrection ||
@@ -167,7 +168,7 @@ export default function Intern({ token }: { token: string }) {
         key={slot.id}
       >
         <div className="row between">
-          <h3>{slot.label}</h3>
+          <h3>{slot.label}{isOptionalDocument(slot) ? " (Optional)" : ""}</h3>
           {doc && !doc.pending && <BadgeCheck size={19} />}
         </div>
         {slot.label === "Degree or last-semester marksheet" && (
@@ -509,7 +510,7 @@ export default function Intern({ token }: { token: string }) {
                           {f.name}
                         </a>
                       ) : (
-                        f ? "On file" : "Missing"
+                        f ? "On file" : isOptionalDocument(r) ? "Not uploaded (Optional)" : "Missing"
                       )}
                     </p>
                   );

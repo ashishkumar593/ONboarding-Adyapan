@@ -13,6 +13,7 @@ import {
   profileComplete,
   profileFields, profileLimits, type Draft,
   isResume,
+  isOptionalDocument,
   type Invitation,
 } from "@shared/model";
 import { validDrawing } from "@shared/signature";
@@ -203,7 +204,10 @@ export async function internAction(id: string, action: string, data: FormData, r
       const docs = inv.requirements.map((r) =>
         inv.files.find((f) => f.slot === r.id),
       );
-      requireThat(docs.every(Boolean), "Upload each required document.");
+      requireThat(
+        inv.requirements.every((r, i) => isOptionalDocument(r) || Boolean(docs[i])),
+        "Upload each required document.",
+      );
       if (resumed) {
         const signed = docs.find(f=>f?.slot==="signed");
         requireThat(signed, "Upload your signed offer letter.");

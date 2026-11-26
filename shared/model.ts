@@ -8,7 +8,9 @@ export type SigningPolicy = {
   introduction: string;
   clauses: string[];
 };
-export type Slot = { id: string; label: string };
+export type Slot = { id: string; label: string; optional?: boolean };
+export const isOptionalDocument = (slot: Slot) =>
+  Boolean(slot.optional || slot.id === "pan");
 export function signedPolicySlot(policy: SigningPolicy): Slot {
   return { id: "policy-" + policy.sha256, label: "Signed copy of " + policy.title };
 }

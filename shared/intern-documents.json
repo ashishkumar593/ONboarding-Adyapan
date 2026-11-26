@@ -4,6 +4,6 @@
   { "id": "intermediate", "label": "Intermediate marksheet" },
   { "id": "degree", "label": "Degree or last-semester marksheet" },
   { "id": "aadhaar", "label": "Aadhaar card" },
-  { "id": "pan", "label": "PAN card" },
+  { "id": "pan", "label": "PAN card", "optional": true },
   { "id": "signed", "label": "Signed offer letter" }
 ]
