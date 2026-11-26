@@ -74,7 +74,7 @@ export async function queueInvite(
   if (
     (
       await db.query(
-        "SELECT 1 FROM invitations WHERE email=$1 AND starts=$2 LIMIT 1",
+        "SELECT 1 FROM invitations WHERE email=$1 AND starts=$2 AND status <> 'removed' LIMIT 1",
         [email, starts],
       )
     ).rowCount

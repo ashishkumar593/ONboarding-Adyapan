@@ -61,7 +61,7 @@ export async function details(
 ): Promise<Invitation> {
   const row = (
     await db.query(
-      "SELECT * FROM invitations WHERE id=$1" + (lock ? " FOR UPDATE" : ""),
+      "SELECT * FROM invitations WHERE id=$1 AND status <> 'removed'" + (lock ? " FOR UPDATE" : ""),
       [id],
     )
   ).rows[0];

@@ -1,5 +1,5 @@
 import { exportReceived } from "../services/received-export";
-import { roster, importRoster, exportRoster } from "../services/roster";
+import { roster, importRoster, exportRoster, removeFromRoster } from "../services/roster";
 import {
   verifyRosterEmail,
   redeemAccess,
@@ -243,6 +243,13 @@ export async function POST(req: NextRequest, ctx: Context) {
     if (action === "import-roster" || action === "add-intern") {
       permit(staff,"invite");
       return json(action === "add-intern" ? await createInvite(data,staff.staff) : await importRoster(data,staff.staff));
+    }
+    if (action === "remove-roster") {
+      permit(staff, "invite");
+      requireFresh(staff);
+      const ids = [...new Set(data.getAll("id").map(value => uuid(typeof value === "string" ? value.toLowerCase() : null)))];
+      requireThat(ids.length > 0, "Select at least one intern.");
+      return json(await removeFromRoster(ids, staff));
     }
     const id = uuid(field(data,"id"));
     await assigned(staff,id);

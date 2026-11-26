@@ -695,6 +695,58 @@ test("HR pages through invitation and received records", async ({ page }) => {
   await expect(tableRows).toContainText("submitted intern 3");
   await expect(page.getByText("Page 1 of 1", { exact: true })).toBeVisible();
 });
+test("HR removes individual interns and batches across roster pages", async ({page, playwright}) => {
+  const post = (client, action, fields) => client.post("/api/" + action, {headers: {Origin: origin}, multipart: fields});
+  const hr = page.request;
+  expect((await post(hr, "hr-login", {email: hrEmail, password, accessKey})).ok()).toBeTruthy();
+  const records = [];
+  for (let n = 0; n < 7; n++) {
+    const entry = {name: "Removal fixture " + n, email: "removal" + n + "@example.test", role: "Intern", starts: "2027-02-01", ends: "2027-03-01"};
+    const response = await post(hr, "add-intern", entry);
+    expect(response.ok()).toBeTruthy();
+    records.push({...entry, id: (await response.json()).id});
+  }
+  const intern = await playwright.request.newContext({baseURL: origin});
+  try {
+    expect((await post(intern, "roster-login", {email: records[6].email})).ok()).toBeTruthy();
+    await page.goto("/hr");
+    await page.getByLabel("Search interns").fill("Removal fixture");
+    await page.getByLabel("Rows per page").selectOption("5");
+    const single = page.getByRole("row").filter({hasText: records[6].email}).getByRole("button", {name: "Remove", exact: true});
+    page.once("dialog", dialog => dialog.dismiss());
+    await single.click();
+    await expect(single).toBeVisible();
+    page.once("dialog", dialog => dialog.accept());
+    await single.click();
+    await expect(single).toHaveCount(0);
+    expect((await intern.get("/api/application")).status()).toBe(401);
+    expect((await post(intern, "roster-login", {email: records[6].email})).status()).toBe(401);
+    await page.getByLabel("Select all interns on this page").check();
+    await page.getByRole("button", {name: "Next", exact: true}).click();
+    await page.getByLabel("Select " + records[0].email).check();
+    await expect(page.getByText("6 selected", {exact: true})).toBeVisible();
+    // A submission that arrives after selection must protect the whole batch.
+    await db.query("UPDATE invitations SET status='submitted' WHERE id=$1", [records[0].id]);
+    page.once("dialog", dialog => dialog.accept());
+    await page.getByRole("button", {name: "Remove selected"}).click();
+    await expect(page.getByRole("alert").filter({hasText: "already submitted"})).toBeVisible();
+    expect((await db.query("SELECT count(*)::int AS n FROM invitations WHERE id=ANY($1::uuid[]) AND status='removed'",
+      [records.map(row => row.id)])).rows[0].n).toBe(1);
+    await page.reload();
+    await page.getByLabel("Search interns").fill("Removal fixture");
+    await page.getByLabel("Select all interns on this page").check();
+    page.once("dialog", dialog => dialog.accept());
+    await page.getByRole("button", {name: "Remove selected"}).click();
+    await expect(page.getByText("5 interns removed.")).toBeVisible();
+    await expect(page.getByText("No matching interns.")).toBeVisible();
+    await page.getByRole("button", {name: /Documents received/}).click();
+    await page.getByLabel("Search submissions").fill(records[0].email);
+    await expect(page.getByRole("row").filter({hasText: records[0].email})).toBeVisible();
+    await expect(page.getByRole("button", {name: "Remove", exact: true})).toHaveCount(0);
+    expect((await post(hr, "add-intern", records[6])).ok()).toBeTruthy();
+  } finally { await intern.dispose(); }
+});
+
 test("named HR credentials, assignments, freshness and intern revocation", async ({playwright})=>{
   const hr=await playwright.request.newContext({baseURL:origin});
   const reviewer=await playwright.request.newContext({baseURL:origin});

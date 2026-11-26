@@ -18,10 +18,32 @@ export async function roster(user: StaffSession): Promise<RosterRow[]> {
     i.reference,i.invitation_email_sent_at,i.draft->>'employeeId' AS employee_id,
     (SELECT max(s.created_at) FROM submissions s WHERE s.invitation=i.id) AS received_at
     FROM invitations i JOIN hr_assignments a ON a.invitation=i.id AND a.staff=$1
-    WHERE CASE WHEN i.reference IS NOT NULL OR i.status IN ('submitted','correction','issued')
+    WHERE i.status <> 'removed' AND CASE WHEN i.reference IS NOT NULL OR i.status IN ('submitted','correction','issued')
       THEN $2::boolean ELSE $3::boolean END ORDER BY i.created_at DESC, i.id`,[user.staff,
       user.permissions.some(p=>p==="review" || p==="issue" || p==="export"),user.permissions.includes("invite")])
   ).rows;
+}
+
+export async function removeFromRoster(ids: string[], user: StaffSession) {
+  return transaction(async db => {
+    const { rows } = await db.query(
+      `SELECT i.id, i.status, i.reference FROM invitations i
+       JOIN hr_assignments a ON a.invitation=i.id AND a.staff=$2
+       WHERE i.id=ANY($1::uuid[]) ORDER BY i.id FOR UPDATE OF i,a`, [ids, user.staff],
+    );
+    requireThat(rows.length === ids.length, "One or more roster records are unavailable.", 404);
+    requireThat(rows.every(row => !row.reference && ["queued", "invited", "draft", "removed"].includes(row.status)),
+      "An intern has already submitted documents. Refresh the roster and review your selection.", 409);
+    const active = rows.filter(row => row.status !== "removed").map(row => row.id);
+    if (active.length) {
+      await db.query("UPDATE invitations SET status='removed', access_revoked_at=now() WHERE id=ANY($1::uuid[])", [active]);
+      await db.query("DELETE FROM sessions WHERE invitation=ANY($1::uuid[])", [active]);
+      await db.query("DELETE FROM email_access_links WHERE invitation=ANY($1::uuid[])", [active]);
+      await db.query(`INSERT INTO events(invitation,action,detail)
+        SELECT id,'removed from roster',jsonb_build_object('actor',$2::text) FROM unnest($1::uuid[]) AS id`, [active, user.staff]);
+    }
+    return { removed: active.length };
+  });
 }
 
 export async function exportRoster(group: string, user: StaffSession) {

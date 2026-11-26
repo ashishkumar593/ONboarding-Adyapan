@@ -954,6 +954,10 @@ dialog p {
 .roster td small {
   display: block;
 }
+.roster .select-column { width: 36px; text-align: center; }
+.roster .select-column input { vertical-align: middle; margin: 0; }
+.roster .remove-action { color: #923b2c; }
+.roster-selection { font-size: var(--control-font); }
 .roster .upload-label {
   margin: 0;
   white-space: nowrap;

@@ -41,6 +41,8 @@ export default function HrRoster({
   const { group, search, size } = view;
   const [importing,setImporting] = useState(false);
   const [progress,setProgress] = useState("");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const canRemove = group === "awaiting" && permissions.includes("invite");
   const received = rows.filter(r=>rosterGroup(r)==="received");
   const matches = rows.filter(
     (r) =>
@@ -54,10 +56,35 @@ export default function HrRoster({
   const page = Math.min(view.page, pages);
   const offset = (page - 1) * size;
   const visible = matches.slice(offset, offset + size);
+  const selectedRows = matches.filter(row => selected.has(row.id));
+  const pageSelected = visible.length > 0 && visible.every(row => selected.has(row.id));
+  function selectRows(records: RosterRow[], checked: boolean) {
+    setSelected(previous => {
+      const next = new Set(previous);
+      for (const record of records) {
+        if (checked) next.add(record.id);
+        else next.delete(record.id);
+      }
+      return next;
+    });
+  }
+  function remove(records: RosterRow[]) {
+    const who = records.length === 1 ? records[0].name + " (" + records[0].email + ")" : records.length + " selected interns";
+    if (!window.confirm("Remove " + who + " from the roster? This ends onboarding access for the selected " +
+      (records.length === 1 ? "record." : "records."))) return;
+    void run(async () => {
+      const data = new FormData();
+      for (const record of records) data.append("id", record.id);
+      const result = await request("remove-roster", data);
+      selectRows(records, false);
+      await refresh();
+      notify(result.removed === 0 ? "Already removed from the roster." :
+        result.removed + (result.removed === 1 ? " intern removed." : " interns removed."));
+    });
+  }
   function change(g: RosterGroup) {
     setView({ ...view, group: g, search: "", page: 1 });
-
-
+    setSelected(new Set());
     setImporting(false);
     notify("");
   }
@@ -235,25 +262,45 @@ export default function HrRoster({
           <input
             type="search"
             value={search}
-            onChange={(e) => setView({ ...view, search: e.target.value, page: 1 })}
+            onChange={(e) => {
+              setSelected(new Set());
+              setView({ ...view, search: e.target.value, page: 1 });
+            }}
             placeholder="Name, email or internship role"
           />
         </label>
         {progress && <p role="status">{progress}…</p>}
+        {canRemove && selectedRows.length > 0 && (
+          <div className="row roster-selection">
+            <span aria-live="polite">{selectedRows.length} selected</span>
+            <button className="secondary remove-action" disabled={busy} onClick={() => remove(selectedRows)}>Remove selected</button>
+            <button className="textbtn" disabled={busy} onClick={() => setSelected(new Set())}>Clear selection</button>
+          </div>
+        )}
         {visible.length ? (
           <div className="roster-scroll">
             <table>
               <thead>
                 <tr>
+                  {canRemove && <th className="select-column">
+                    <input type="checkbox" aria-label="Select all interns on this page" disabled={busy}
+                      checked={pageSelected} ref={input => { if (input) input.indeterminate = !pageSelected && visible.some(r => selected.has(r.id)); }}
+                      onChange={e => selectRows(visible, e.target.checked)} />
+                  </th>}
                   <th>Intern</th>
                   <th>Internship</th>
                   <th>Status</th>
+                  {canRemove && <th>Action</th>}
                   {group==="received" && <th>Received</th>}
                 </tr>
               </thead>
               <tbody>
                 {visible.map((r) => (
                   <tr key={r.id}>
+                    {canRemove && <td className="select-column">
+                      <input type="checkbox" aria-label={"Select " + r.email} disabled={busy}
+                        checked={selected.has(r.id)} onChange={e => selectRows([r], e.target.checked)} />
+                    </td>}
                     <td>
                       <button
                         className="roster-name"
@@ -262,13 +309,15 @@ export default function HrRoster({
                       >
                         {r.name}
                       </button>
-                      <small>{r.email}</small>
+                      <small id={"roster-email-" + r.id}>{r.email}</small>
                     </td>
                     <td>
                       {r.role}
                       <small>{statusDate(r.starts)}</small>
                     </td>
                     <td><span className="badge">{statuses[r.status]}</span></td>
+                    {canRemove && <td><button className="textbtn remove-action" aria-describedby={"roster-email-" + r.id}
+                      disabled={busy} onClick={() => remove([r])}>Remove</button></td>}
                     {group==="received" && <td>{r.received_at ? statusDate(r.received_at) : r.reference}</td>}
                   </tr>
                 ))}

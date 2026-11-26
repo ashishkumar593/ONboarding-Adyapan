@@ -55,7 +55,7 @@ export async function assigned(
   requireThat(
     (
       await db.query(
-        "SELECT 1 FROM hr_assignments WHERE staff=$1 AND invitation=$2",
+        "SELECT 1 FROM hr_assignments a JOIN invitations i ON i.id=a.invitation WHERE a.staff=$1 AND a.invitation=$2 AND i.status <> 'removed'",
         [staff.staff, id],
       )
     ).rowCount,

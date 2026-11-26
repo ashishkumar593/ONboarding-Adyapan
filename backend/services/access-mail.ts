@@ -60,7 +60,7 @@ export async function verifyRosterEmail(email: string) {
           AND NOT EXISTS(SELECT 1 FROM files WHERE invitation=i.id)
           AND NOT EXISTS(SELECT 1 FROM sessions WHERE invitation=i.id) AS first_claim,
           last_access_request_at>now()-interval '1 minute' AS recently_mailed
-       FROM invitations i WHERE lower(email)=$1
+       FROM invitations i WHERE lower(email)=$1 AND status <> 'removed'
        ORDER BY starts DESC,created_at DESC,id DESC LIMIT 1 FOR UPDATE`,
       [email])).rows[0];
     requireThat(recipient && !recipient.access_revoked_at,"Check the email address or contact HR to join the roster.",401);
@@ -93,7 +93,7 @@ export async function redeemAccess(token: string, secret: string) {
 
 export async function changeAccess(id: string, actor: string, restore: boolean) {
   return transaction(async db => {
-    const row = (await db.query("SELECT * FROM invitations WHERE id=$1 FOR UPDATE",[id])).rows[0];
+    const row = (await db.query("SELECT * FROM invitations WHERE id=$1 AND status <> 'removed' FOR UPDATE",[id])).rows[0];
     requireThat(row,"Record unavailable.",404);
     if (restore) requireThat(row.access_revoked_at,"Access is already active.",409);
     const token = crypto.randomBytes(24).toString("base64url");
