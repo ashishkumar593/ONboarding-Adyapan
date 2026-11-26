@@ -14,7 +14,7 @@ export class RequestError extends Error {
 export async function request(action: string, data?: FormData, signal?: AbortSignal) {
   const res = await fetch(
     "/api/" + action,
-    data ? { method: "POST", body: data, signal } : { cache: "no-store", signal },
+    data ? { method: "POST", body: data, signal, keepalive: action === "save-progress" } : { cache: "no-store", signal },
   );
   const result = await res.json();
   if (!res.ok)

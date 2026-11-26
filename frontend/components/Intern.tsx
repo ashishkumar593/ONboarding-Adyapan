@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   BadgeCheck,
   Check,
@@ -22,13 +22,13 @@ import {
   statusDate,
   statuses,
   type Slot,
-  type Invitation,
+  type InternView, type ProfileField, profileFields,
 } from "@shared/model";
 
 type RosterStatus = { statusOnly: true; email: string; status: string };
 
 export default function Intern({ token }: { token: string }) {
-  const [inv, setInv] = useState<Invitation | null>(null),
+  const [inv, setInv] = useState<InternView | null>(null),
     [ready, setReady] = useState(false),
     [summary, setSummary] = useState<RosterStatus | null>(null),
     [error, setError] = useState(""),
@@ -36,8 +36,49 @@ export default function Intern({ token }: { token: string }) {
   const [email, setEmail] = useState("");
   const [step, setStep] = useState(0),
     [progress, setProgress] = useState<Record<string, number>>({});
+  const invitationId = inv?.id;
+  const autosave = useMemo(() => {
+    let pending: Record<string,string> = {};
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let saving: Promise<void> | undefined;
+    function flush() {
+      clearTimeout(timer);
+      if (saving) return saving;
+      if (!invitationId || !Object.keys(pending).length) return Promise.resolve();
+      saving = (async () => {
+        while (Object.keys(pending).length) {
+          const values = pending;
+          pending = {};
+          try {
+            await request("save-progress",form({invitation:invitationId,...values}));
+          } catch (e) {
+            pending = {...values,...pending};
+            throw e;
+          }
+        }
+      })().finally(() => { saving = undefined; });
+      return saving;
+    }
+    return {
+      flush,
+      change(key:string, value:string) {
+        pending[key] = value;
+        clearTimeout(timer);
+        timer = setTimeout(() => flush().catch(e => setError(e.message)), 400);
+      },
+      leave() {
+        clearTimeout(timer);
+        if (invitationId && Object.keys(pending).length)
+          void fetch("/api/save-progress",{method:"POST",keepalive:true,body:form({invitation:invitationId,...pending})}).catch(() => {});
+      },
+    };
+  },[invitationId]);
+  useEffect(() => {
+    window.addEventListener("pagehide",autosave.leave);
+    return () => window.removeEventListener("pagehide",autosave.leave);
+  },[autosave]);
   async function load(resume = false) {
-    const result: Invitation | RosterStatus = await request(
+    const result: InternView | RosterStatus = await request(
       "application" + (token ? "?token=" + encodeURIComponent(token) : ""),
     );
     if ("statusOnly" in result) {
@@ -108,10 +149,15 @@ export default function Intern({ token }: { token: string }) {
     !inv?.correction || !!policyCorrection ||
     inv.files.find((f) => f.slot === inv.correction!.slot)?.id !==
       inv.correction.previous;
+  const reviewProfile = inv ? {...inv.draft} : {};
+  for (const key of inv?.savedFields ?? []) reviewProfile[key] = "Saved";
+  function savedField(key: ProfileField) {
+    return inv?.savedFields?.includes(key) ?? false;
+  }
   function renderUpload(slot: Slot) {
     if (!inv) return null;
     const doc = inv.files.find((f) => f.slot === slot.id),
-      locked = !!inv.correction && inv.correction.slot !== slot.id;
+      locked = (!!inv.correction && inv.correction.slot !== slot.id) || (!!inv.savedFields && !!doc);
     const pdfOnly = slot.id === "signed" || isResume(slot);
     return (
       <div
@@ -132,7 +178,8 @@ export default function Intern({ token }: { token: string }) {
         )}
         <small>{pdfOnly ? "PDF" : "PDF, PNG or JPEG"} · Up to 8 MB</small>
         {doc?.pending && <p role="status">File saved privately. You can continue filling out your application. Screening must finish before you can open the file or submit.</p>}
-        {doc && (
+        {doc && !doc.id && <p>On file</p>}
+        {doc?.id && (
           <a
             className="filelink"
             href={fileUrl(doc.id)}
@@ -278,13 +325,13 @@ export default function Intern({ token }: { token: string }) {
             <UserRound size={15} /> Roster match
           </div>
           <h1>Your application</h1>
-          <div className="summary-box">
+          {!inv.savedFields && <div className="summary-box">
             <strong>{inv.name}</strong>
             <span>{inv.role}</span>
             <span>
               {statusDate(inv.starts)} – {statusDate(inv.ends)}
             </span>
-          </div>
+          </div>}
           {inv.correction && (
             <div className="notice">
               <strong>
@@ -326,12 +373,19 @@ export default function Intern({ token }: { token: string }) {
             <section className="panel">
               <h2>Personal details</h2>
               <form
+                onChange={e => {
+                  const input = e.target;
+                  if (input instanceof HTMLInputElement && !inv.correction && !input.disabled &&
+                      profileFields.includes(input.name as ProfileField)) autosave.change(input.name,input.value);
+                }}
+                onBlur={() => {void autosave.flush().catch(e => setError(e.message));}}
                 onSubmit={(e) => {
                   e.preventDefault();
                   const data = new FormData(e.currentTarget);
                   data.set("invitation", inv.id);
                   void run(async () => {
                     if (!inv.correction) {
+                      await autosave.flush();
                       const draft = await request("draft", data);
                       setInv(draft);
                     }
@@ -344,6 +398,7 @@ export default function Intern({ token }: { token: string }) {
                     Full name
                     <input
                       name="name"
+                      disabled={savedField("name")} placeholder={savedField("name") ? "Saved" : undefined}
                       autoComplete="name"
                       required
                       maxLength={160}
@@ -355,6 +410,7 @@ export default function Intern({ token }: { token: string }) {
                     Employee ID
                     <input
                       name="employeeId"
+                      disabled={savedField("employeeId")} placeholder={savedField("employeeId") ? "Saved" : undefined}
                       required={!inv.correction}
                       maxLength={80}
                       defaultValue={inv.draft.employeeId}
@@ -372,6 +428,7 @@ export default function Intern({ token }: { token: string }) {
                     Phone number
                     <input
                       name="phone"
+                      disabled={savedField("phone")} placeholder={savedField("phone") ? "Saved" : undefined}
                       type="tel"
                       autoComplete="tel"
                       required
@@ -384,6 +441,7 @@ export default function Intern({ token }: { token: string }) {
                     College name
                     <input
                       name="college"
+                      disabled={savedField("college")} placeholder={savedField("college") ? "Saved" : undefined}
                       required
                       maxLength={160}
                       defaultValue={inv.draft.college}
@@ -404,8 +462,7 @@ export default function Intern({ token }: { token: string }) {
             <section className="panel">
               <h2>Your documents</h2>
               <p>
-                Upload a separate file for each requirement. You can replace a
-                file before you submit.
+                {inv.savedFields ? "Upload the remaining documents. Previously uploaded files are on file." : "Upload a separate file for each requirement. You can replace a file before you submit."}
               </p>
               {inv.requirements.filter((r) => !isResume(r)).map(renderUpload)}
               <button
@@ -422,7 +479,7 @@ export default function Intern({ token }: { token: string }) {
               <details className="application-review">
                 <summary>Review your details and uploads</summary>
                 <dl className="review-list">
-                  {Object.entries(profileValues(inv)).map(([k, v]) => (
+                  {Object.entries(profileValues({...inv, draft:reviewProfile})).map(([k, v]) => (
                     <div key={k}>
                       <dt>{k}</dt>
                       <dd>{v}</dd>
@@ -434,7 +491,7 @@ export default function Intern({ token }: { token: string }) {
                   return (
                     <p key={r.id}>
                       {r.label} ·{" "}
-                      {f ? (
+                      {f?.id ? (
                         <a
                           href={fileUrl(f.id)}
                           target="_blank"
@@ -443,7 +500,7 @@ export default function Intern({ token }: { token: string }) {
                           {f.name}
                         </a>
                       ) : (
-                        "Missing"
+                        f ? "On file" : "Missing"
                       )}
                     </p>
                   );
@@ -487,6 +544,13 @@ export default function Intern({ token }: { token: string }) {
                       throw new Error(
                         "Draw your signature or choose Type signature.",
                       );
+                    if (inv.confirmSignedOffer) {
+                      const file = data.get("confirmOffer");
+                      if (!(file instanceof File) || file.size > 8 * 1024 * 1024) throw Error("Choose your original signed offer PDF (up to 8 MB).");
+                      const bytes = await crypto.subtle.digest("SHA-256",await file.arrayBuffer());
+                      data.delete("confirmOffer");
+                      data.set("signedOfferDigest",Array.from(new Uint8Array(bytes),b => b.toString(16).padStart(2,"0")).join(""));
+                    }
                     await request("submit", data);
                     await load();
                   });
@@ -496,6 +560,10 @@ export default function Intern({ token }: { token: string }) {
                   <input required type="checkbox" name="agreed" value="yes" />
                   {termsAcknowledgement}
                 </label>
+                {inv.confirmSignedOffer && <label>Confirm your previously uploaded signed offer
+                  <input required type="file" name="confirmOffer" accept="application/pdf" />
+                  <small>Select the same PDF to sign this saved application. Only its fingerprint is sent.</small>
+                </label>}
                 <SignatureField />
                 <button className="button" disabled={busy || !corrected}>
                   {busy ? "Submitting…" : "Sign and submit"}
@@ -521,6 +589,7 @@ export default function Intern({ token }: { token: string }) {
             disabled={busy}
             onClick={() =>
               run(async () => {
+                await autosave.flush();
                 await request("logout", form({}));
                 setEmail("");
                 setSummary(null);

@@ -88,18 +88,27 @@ export function currentRequirements(previous: Slot[]) {
       )?.id ?? slot.id,
   }));
 }
-export function profileComplete(inv: Invitation) {
+export const profileLimits = {name:160, employeeId:80, phone:30, college:160} as const;
+export type ProfileField = keyof typeof profileLimits;
+export const profileFields = Object.keys(profileLimits) as ProfileField[];
+export function validProfileValue(key: ProfileField, value?: string) {
+  return !!value?.trim() && value.length <= profileLimits[key] &&
+    (key !== "phone" || (/^[+\d()\s.-]{7,30}$/.test(value) && value.replace(/\D/g, "").length >= 7));
+}
+export type InternView = Pick<Invitation, "id"|"status"|"email"|"draft"|"name"|"role"|"starts"|"ends"|"reference"|"correction"|"issued_file"|"terms"|"policies"|"version"|"requirements"|"revision"> & {
+  files: (Pick<Doc,"slot"|"pending"> & Partial<Pick<Doc,"id"|"name">>)[];
+  savedFields?: ProfileField[];
+  confirmSignedOffer?: boolean;
+};
+export function profileComplete(inv: InternView) {
   return Boolean(
-    inv.draft.name &&
-    inv.draft.employeeId &&
-    inv.draft.phone &&
-    inv.draft.college &&
+    profileFields.every(key => inv.savedFields?.includes(key) || validProfileValue(key,inv.draft[key])) &&
     inv.requirements.some(
       (r) => isResume(r) && inv.files.some((f) => f.slot === r.id),
     ),
   );
 }
-export function profileValues(inv: Invitation) {
+export function profileValues(inv: Pick<Invitation,"draft"|"name"|"email">) {
   return {
     Name: inv.draft.name || inv.name,
     "Employee ID": inv.draft.employeeId,

@@ -11,6 +11,7 @@ import {
   signedPolicySlot,
   standardDocuments,
   profileComplete,
+  profileFields, profileLimits, type Draft,
   isResume,
   type Invitation,
 } from "@shared/model";
@@ -18,6 +19,7 @@ import { validDrawing } from "@shared/signature";
 import type { Stroke } from "@shared/signature";
 import { signatureImage, signPolicyPdf } from "./signing-policies";
 import { loadHrStamp } from "./hr-stamp";
+import { fieldDigest, privateField, resumeRevision, resumeView, unfinished, type ResumeSession } from "./draft-progress";
 
 export function field(data: FormData, key: string, max = 160) {
   const value = data.get(key);
@@ -112,14 +114,43 @@ export async function createInvite(data: FormData, actor: string) {
 }
 const editable = (inv: Invitation) =>
   requireThat(
-    ["invited", "draft"].includes(inv.status),
+    ["queued", "invited", "draft"].includes(inv.status),
     "This application has already been submitted.",
     409,
   );
-export async function internAction(id: string, action: string, data: FormData) {
+export async function internAction(id: string, action: string, data: FormData, resumeDigest?: string) {
   return transaction(async (db) => {
     const inv = await details(db, id, true);
-    if (action === "draft") {
+    let resumed: ResumeSession | undefined;
+    if (resumeDigest) {
+      const {rows:[session]} = await db.query(
+        "SELECT draft_progress FROM sessions WHERE digest=$1 AND invitation=$2 AND method='roster-status' AND expires>now() FOR UPDATE",
+        [resumeDigest,id],
+      );
+      requireThat(session && !inv.access_revoked_at, "Sign in again to continue.",401);
+      requireThat(await unfinished(db,inv), "This application has already been submitted.",409);
+      resumed = {digest:resumeDigest,progress:session.draft_progress};
+    }
+    if (action === "save-progress" || (action === "draft" && resumed)) {
+      editable(inv);
+      const patch: Draft = {};
+      for (const key of profileFields) {
+        const value = data.get(key);
+        if (value === null) continue;
+        requireThat(!resumed || !privateField(inv,resumed,key), "This detail is already saved.",409);
+        requireThat(typeof value === "string" && value.length <= profileLimits[key], "Check your personal details.");
+        patch[key] = value.trim();
+      }
+      await db.query("UPDATE invitations SET draft=draft||$1::jsonb WHERE id=$2", [JSON.stringify(patch), id]);
+      if (resumed) {
+        const owned: Record<string,string> = {};
+        for (const [key,value] of Object.entries(patch)) owned[key] = fieldDigest(resumed,key,value);
+        await db.query("UPDATE sessions SET draft_progress=draft_progress||$1::jsonb WHERE digest=$2",[JSON.stringify(owned),resumed.digest]);
+        Object.assign(resumed.progress,owned);
+      }
+      if (action === "save-progress") return {ok:true};
+      requireThat(profileComplete({...inv,draft:{...inv.draft,...patch}}), "Complete your personal details and upload your résumé.");
+    } else if (action === "draft") {
       editable(inv);
       requireThat(
         data.get("email") === inv.email,
@@ -144,6 +175,7 @@ export async function internAction(id: string, action: string, data: FormData) {
       const slot = field(data, "slot");
       const requirement = inv.requirements.find((r) => r.id === slot);
       requireThat(requirement, "Unknown document slot.");
+      if (resumed) requireThat(!inv.files.some(f=>f.slot===slot), "This document is already saved.",409);
       if (inv.status === "correction")
         requireThat(
           inv.correction?.slot === slot,
@@ -156,12 +188,16 @@ export async function internAction(id: string, action: string, data: FormData) {
       const usage = (await db.query("SELECT count(*)::int AS versions,coalesce(sum(bytes),0)::bigint AS bytes FROM files WHERE invitation=$1 AND slot NOT IN ('issued','original')",[id])).rows[0];
       requireThat(usage.versions < 48 && Number(usage.bytes) + file.data.length <= 128 * 1024 * 1024,
         "Upload limit reached. Contact HR to review your stored versions.", 413);
-      await storeFile(db, id, slot, file);
+      const fileId = await storeFile(db, id, slot, file);
+      if (resumed && slot === "signed") {
+        resumed.progress.signed = fileId;
+        await db.query("UPDATE sessions SET draft_progress=draft_progress||$1::jsonb WHERE digest=$2",[JSON.stringify({signed:fileId}),resumed.digest]);
+      }
     } else if (action === "submit") {
       if (["submitted", "issued"].includes(inv.status))
         return { reference: inv.reference };
       requireThat(
-        data.get("revision") === inv.revision,
+        data.get("revision") === (resumed ? resumeRevision(inv,resumed) : inv.revision),
         "Your application changed. Reload and review the latest version.",
         409,
       );
@@ -169,6 +205,14 @@ export async function internAction(id: string, action: string, data: FormData) {
         inv.files.find((f) => f.slot === r.id),
       );
       requireThat(docs.every(Boolean), "Upload each required document.");
+      if (resumed) {
+        const signed = docs.find(f=>f?.slot==="signed");
+        requireThat(signed, "Upload your signed offer letter.");
+        if (signed.id !== resumed.progress.signed) {
+          const digest = field(data,"signedOfferDigest",64);
+          requireThat(digest === contentDigest(await get(signed.id,db)), "Choose the signed offer PDF you originally uploaded.",403);
+        }
+      }
       for (const doc of docs) {
         if (doc?.pending) {
           try { await get(doc.id, db); }
@@ -262,8 +306,10 @@ export async function internAction(id: string, action: string, data: FormData) {
         [reference, id, JSON.stringify(inv.requirements)],
       );
       await event(db, id, "submitted", { reference });
+      if (resumed) return {ok:true};
     } else requireThat(false, "Unknown action.", 404);
-    return details(db, id);
+    const result = await details(db,id);
+    return resumed ? resumeView(result,resumed) : result;
   });
 }
 export async function review(id: string, action: string, data: FormData, staff: StaffSession) {

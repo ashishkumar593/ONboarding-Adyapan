@@ -1,6 +1,7 @@
 import { exportReceived, signatureSvg } from "../services/received-export";
 import { roster, importRoster, exportRoster, removeFromRoster } from "../services/roster";
 import { verifyRosterEmail, changeAccess } from "../services/access-mail";
+import { resumeView, unfinished } from "../services/draft-progress";
 import { cookies } from "next/headers";
 import { NextRequest, NextResponse } from "next/server";
 import QRCode from "qrcode";
@@ -56,11 +57,17 @@ export async function GET(req: NextRequest, ctx: Context) {
     if (action === "application") {
       const user = await auth(false, true);
       requireThat(!q.get("token") || q.get("token") === user.token, "Sign in to this application.", 401);
-      if (user.method === "roster-status") return json({ statusOnly: true, email: user.email, status: user.status });
+      if (user.method === "roster-status") {
+        if (["queued","invited","draft"].includes(user.status)) {
+          const inv = await details(pool,user.invitation);
+          if (await unfinished(pool,inv)) return json(resumeView(inv,{digest:user.digest,progress:user.draft_progress}));
+        }
+        return json({ statusOnly: true, email: user.email, status: user.status });
+      }
       return json(await details(pool, user.invitation));
     }
     if (action === "signing-policy") {
-      await auth();
+      await auth(false,true);
       const policy = signingPolicies.find(item => item.file === q.get("file"));
       requireThat(policy, "Policy unavailable.", 404);
       const bytes = await readPolicyPdf(policy);
@@ -214,7 +221,7 @@ export async function POST(req: NextRequest, ctx: Context) {
     );
     const offerSession = action === "stamped-offer" ? await auth(false, true) : null;
     if (!offerSession && !["roster-login", "hr-login", "logout"].includes(action))
-      await auth(!["draft", "upload", "submit"].includes(action));
+      await auth(!["save-progress", "draft", "upload", "submit"].includes(action), true);
     const body = req.body?.getReader();
     requireThat(body, "Empty request.");
     const parts: Uint8Array<ArrayBuffer>[] = [];
@@ -272,14 +279,14 @@ export async function POST(req: NextRequest, ctx: Context) {
       jar.delete(key);
       return json({ ok: true });
     }
-    if (["upload", "draft", "submit"].includes(action)) {
-      const user = await auth();
+    if (["upload", "save-progress", "draft", "submit"].includes(action)) {
+      const user = await auth(false,true);
       requireThat(
         data.get("invitation") === user.invitation,
         "Your active invitation changed. Reopen the application.",
         409,
       );
-      return json(await internAction(user.invitation, action, data));
+      return json(await internAction(user.invitation, action, data, user.method === "roster-status" ? user.digest : undefined));
     }
     const staff = await auth(true);
     if (action === "import-roster" || action === "add-intern") {

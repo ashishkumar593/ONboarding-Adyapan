@@ -256,16 +256,19 @@ test("HR invitation, phone onboarding, correction and idempotent PDF issuance", 
   for (let attempt = 0; attempt < 2; attempt++) {
     await returning.getByLabel("Registered email address").fill(email.toUpperCase());
     await returning.getByRole("button", {name:"Continue",exact:true}).click();
-    await expect(returning.getByRole("heading", {name:"Application status"})).toBeVisible();
+    await expect(returning.getByRole("heading", {name:"Your documents"})).toBeVisible();
     await returning.reload();
-    await expect(returning.getByRole("status")).toHaveText("In progress");
-    const summary = await (await returning.request.get("/api/application")).json();
-    expect(summary).toEqual({statusOnly:true, email, status:"draft"});
+    await expect(returning.getByRole("heading", {name:"Your documents"})).toBeVisible();
+    const progress = await (await returning.request.get("/api/application")).json();
+    expect(progress.draft).toEqual({});
+    expect(progress.savedFields.sort()).toEqual(["college","employeeId","name","phone"]);
+    expect(progress.files).toEqual([{slot:"resume",pending:true}]);
+    expect(progress.token).toBeUndefined();
     const session = (await second.cookies()).find(c => c.name === "ady_intern");
     expect(Math.abs(session.expires-firstCookie.expires)).toBeLessThan(2);
     const full = await (await phone.request.get("/api/application")).json();
     expect((await returning.request.get("/api/file?id=" + full.files[0].id)).status()).toBe(401);
-    expect((await returning.request.post("/api/draft", {headers:{Origin:origin},multipart:{invitation:inviteId}})).status()).toBe(401);
+    expect((await returning.request.post("/api/draft", {headers:{Origin:origin},multipart:{invitation:inviteId,phone:"9876543210"}})).status()).toBe(409);
     await returning.getByRole("button", {name:"Sign out",exact:true}).click();
     await expect(returning.getByLabel("Registered email address")).toBeVisible();
   }
@@ -624,6 +627,57 @@ test("HR invitation, phone onboarding, correction and idempotent PDF issuance", 
   expect((await intern.request.get(href)).status()).toBe(401);
   await first.close();
 });
+test("a signed-out draft resumes at each missing step and protects previously saved data", async ({ browser, page }) => {
+  const address = "resume-check@example.test";
+  const post = (client, action, fields) => client.post("/api/" + action, {headers: {Origin:origin}, multipart: fields});
+  expect((await post(page.request,"hr-login",{email:hrEmail,password,accessKey})).ok()).toBe(true);
+  const {id} = await (await post(page.request,"add-intern",{name:"Draft test",email:address,role:"Intern",starts:"2027-02-01",ends:"2027-03-01"})).json();
+  async function signIn(p) {
+    await p.goto("/apply");
+    await p.getByLabel("Registered email address").fill(address);
+    await p.getByRole("button",{name:"Continue",exact:true}).click();
+  }
+  await signIn(page);
+  await page.getByLabel("Employee ID").fill("PRIVATE-123");
+  await page.getByRole("button",{name:"Sign out"}).click();
+  await expect(page.getByLabel("Registered email address")).toBeVisible();
+  const ctx = await browser.newContext({baseURL:origin});
+  const next = await ctx.newPage();
+  try {
+    await signIn(next);
+    await expect(next.getByRole("heading",{name:"Personal details"})).toBeVisible();
+    await expect(next.getByLabel("Employee ID")).toBeDisabled();
+    await expect(next.getByLabel("Employee ID")).toHaveValue("");
+    const current = await (await next.request.get("/api/application")).json();
+    expect(JSON.stringify(current)).not.toContain("PRIVATE-123");
+    await next.getByLabel("Full name").fill("Returning Intern");
+    await next.getByLabel("College name").fill("Saved College");
+    await next.getByLabel("Phone number").fill("9876543210");
+    await next.getByLabel("Upload Résumé").setInputFiles(sample);
+    await next.getByRole("button",{name:"Save and continue"}).click();
+    await expect(next.getByRole("heading",{name:"Your documents"})).toBeVisible();
+    for (const slot of current.requirements.filter(r => r.id !== "resume")) {
+      expect((await post(next.request,"upload",{invitation:id,slot:slot.id,file:sample})).ok()).toBe(true);
+    }
+    await next.getByRole("button",{name:"Sign out"}).click();
+    await signIn(next);
+    await expect(next.getByRole("heading",{name:"Terms and signature"})).toBeVisible();
+    const ready = await (await next.request.get("/api/application")).json();
+    expect(ready.confirmSignedOffer).toBe(true);
+    expect(ready.files.every(f => !f.name && !f.id)).toBe(true);
+    expect((await post(next.request,"upload",{invitation:id,slot:"resume",file:sample})).status()).toBe(409);
+    const terms = {invitation:id,revision:ready.revision,version:ready.version,agreed:"yes",signatureMode:"type",signature:"Returning Intern"};
+    expect((await post(next.request,"submit",{...terms,signedOfferDigest:"0".repeat(64)})).status()).toBe(403);
+    expect(await (await post(next.request,"submit",{...terms,signedOfferDigest:crypto.createHash("sha256").update(sample.buffer).digest("hex")})).json()).toEqual({ok:true});
+    await next.reload();
+    await expect(next.getByRole("heading",{name:"Application status"})).toBeVisible();
+    await expect(next.getByRole("status")).toHaveText("In review");
+    expect((await post(next.request,"save-progress",{invitation:id,name:"Changed"})).status()).toBe(409);
+    const row = (await db.query("SELECT draft FROM invitations WHERE id=$1",[id])).rows[0];
+    expect(row.draft.employeeId).toBe("PRIVATE-123");
+  } finally { await ctx.close(); }
+});
+
 test("welcome fits phone and desktop, and help and stage details open", async ({
   page,
 }) => {

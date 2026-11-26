@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS hr_access_events (
  invitation uuid, file_id uuid, detail jsonb NOT NULL DEFAULT '{}', created_at timestamptz NOT NULL DEFAULT now()
 );
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS method text;
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS draft_progress jsonb NOT NULL DEFAULT '{}';
 ALTER TABLE invitations ADD COLUMN IF NOT EXISTS intern_access_expires_at timestamptz;
 -- Older versions kept the 30-day deadline on remembered-browser grants.
 -- When no grant remains, use the earliest recorded intern activity.

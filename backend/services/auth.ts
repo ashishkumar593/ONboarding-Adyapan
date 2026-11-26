@@ -21,7 +21,7 @@ export async function auth(hr = false, allowRosterStatus = false) {
               s.verified_at > now()-interval '10 minutes' AS fresh
           FROM sessions s JOIN hr_staff h ON h.email=s.staff
           WHERE s.digest=$1 AND s.hr AND s.expires>now() AND h.enabled AND h.credential_version=s.credential_version`
-          : `SELECT s.invitation,s.hr,s.method,i.status,i.email,i.token FROM sessions s JOIN invitations i ON i.id=s.invitation
+          : `SELECT s.invitation,s.hr,s.method,s.digest,s.draft_progress,i.status,i.email,i.token FROM sessions s JOIN invitations i ON i.id=s.invitation
           WHERE s.digest=$1 AND (s.method IN ('invitation','mail') OR ($2 AND s.method='roster-status')) AND NOT s.hr AND s.expires>now()
             AND i.intern_access_expires_at>now() AND i.access_revoked_at IS NULL AND i.status <> 'removed'`,
         hr ? [hash(token)] : [hash(token),allowRosterStatus],
