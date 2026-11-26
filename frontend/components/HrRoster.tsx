@@ -1,12 +1,15 @@
 "use client";
 import { useState } from "react";
-import { Download, FileCheck2, Mail, Plus, Upload, Send } from "lucide-react";
+import { Download, FileCheck2, Mail, Plus, Upload } from "lucide-react";
 import { rosterGroup, statusDate, statuses, type RosterRow } from "@shared/model";
-import { request, form, decodeFile } from "./client";
+import { request, decodeFile, RequestError } from "./client";
 import type { ReceivedExport } from "@shared/received-export";
 export type RosterGroup = ReturnType<typeof rosterGroup>;
 export type RosterView = { group: RosterGroup; search: string; page: number; size: number };
+import type { Permission } from "@shared/hr";
 type Props = {
+  sharedUrl: string;
+  permissions: Permission[];
   rows: RosterRow[];
   view: RosterView;
   setView: (view: RosterView) => void;
@@ -18,12 +21,13 @@ type Props = {
   notify: (s: string) => void;
 };
 const titles = {
-  pending: "To invite",
   awaiting: "Awaiting documents",
   received: "Documents received",
 };
 const excelUrl = (group: string) => "/api/roster-xlsx?group=" + group;
 export default function HrRoster({
+  sharedUrl,
+  permissions,
   rows,
   view,
   setView,
@@ -35,12 +39,9 @@ export default function HrRoster({
   notify,
 }: Props) {
   const { group, search, size } = view;
-  const [selected, setSelected] = useState<string[]>([]),
-    [importing, setImporting] = useState(false);
-  const [progress, setProgress] = useState(""),
-    [issues, setIssues] = useState<string[]>([]);
-  const pending = rows.filter((r) => rosterGroup(r) === "pending"),
-    received = rows.filter((r) => rosterGroup(r) === "received");
+  const [importing,setImporting] = useState(false);
+  const [progress,setProgress] = useState("");
+  const received = rows.filter(r=>rosterGroup(r)==="received");
   const matches = rows.filter(
     (r) =>
       rosterGroup(r) === group &&
@@ -53,15 +54,22 @@ export default function HrRoster({
   const page = Math.min(view.page, pages);
   const offset = (page - 1) * size;
   const visible = matches.slice(offset, offset + size);
-  const chosen = matches.filter((r) => selected.includes(r.id));
-  const selectedHere = visible.filter((r) => selected.includes(r.id)).length;
-  const all = visible.length > 0 && visible.length === selectedHere;
   function change(g: RosterGroup) {
     setView({ ...view, group: g, search: "", page: 1 });
-    setSelected([]);
-    setIssues([]);
+
+
     setImporting(false);
     notify("");
+  }
+  async function downloadRoster() {
+    const response = await fetch(excelUrl(group), {cache:"no-store"});
+    if (!response.ok) throw new RequestError((await response.json()).error, response.status);
+    const url = URL.createObjectURL(await response.blob());
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "adyapan-" + group + ".xlsx";
+    link.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
   }
   async function downloadReceived() {
     setProgress("Preparing workbook");
@@ -91,51 +99,19 @@ export default function HrRoster({
       setProgress("");
     }
   }
-  async function send(batch: RosterRow[]) {
-    setIssues([]);
-    const failures: string[] = [],
-      retry: string[] = [];
-    let sent = 0,
-      skipped = 0;
-    try {
-      for (const [i, r] of batch.entries()) {
-        setProgress("Sending " + (i + 1) + " of " + batch.length);
-        try {
-          const result = await request("send-queued", form({ id: r.id }));
-          if (result.sent) sent++;
-          else skipped++;
-        } catch (e) {
-          failures.push(r.email + " — " + (e as Error).message);
-          retry.push(r.id);
-        }
-      }
-      setSelected(retry);
-      setIssues(failures);
-      await refresh();
-      notify(
-        sent +
-          " sent" +
-          (skipped ? ", " + skipped + " already processed" : "") +
-          (failures.length ? ", " + failures.length + " failed" : "") +
-          ".",
-      );
-    } finally {
-      setProgress("");
-    }
-  }
   return (
     <section className="roster" aria-label="Intern records">
       <nav className="roster-tabs" aria-label="HR lists">
-        <button
+        {permissions.includes("invite") && <button
           disabled={busy}
           aria-pressed={group !== "received"}
-          onClick={() => change("pending")}
+          onClick={() => change("awaiting")}
         >
           <Mail size={22} />
-          <span>Invitation queue</span>
-          <b>{pending.length}</b>
-        </button>
-        <button
+          <span>Intern roster</span>
+          <b>{rows.length - received.length}</b>
+        </button>}
+        {permissions.some(p=>p!=="invite") && <button
           disabled={busy}
           aria-pressed={group === "received"}
           onClick={() => change("received")}
@@ -143,18 +119,18 @@ export default function HrRoster({
           <FileCheck2 size={22} />
           <span>Documents received</span>
           <b>{received.length}</b>
-        </button>
+        </button>}
       </nav>
       <section className="panel roster-panel">
         <div className="row between">
           <div>
             <h2>
-              {group === "received" ? "Documents received" : "Invitations"}
+              {group === "received" ? "Documents received" : "Intern roster"}
             </h2>
             <p>
               {group === "received"
                 ? "Open a submission to review it, or export the workbook and uploaded files together as a ZIP."
-                : "Send personal onboarding links to interns individually or in bulk."}
+                : "Import the Excel sheet to give listed interns access."}
             </p>
           </div>
           <div className="row">
@@ -162,7 +138,7 @@ export default function HrRoster({
               <>
                 <button className="button" disabled={busy} onClick={create}>
                   <Plus size={16} />
-                  Create invitation
+                  Add intern
                 </button>
                 <button
                   className="secondary"
@@ -175,17 +151,17 @@ export default function HrRoster({
                 </button>
               </>
             )}
-            {group === "received" ? (
+            {permissions.includes("export") && (group === "received" ? (
               <button className="secondary" disabled={busy} onClick={() => run(downloadReceived)}>
                 <Download size={16} />
                 Export Excel + documents
               </button>
             ) : (
-              <a className="secondary" href={excelUrl(group)} download>
+              <a className="secondary" href={excelUrl(group)} download onClick={e=>{ e.preventDefault(); void run(downloadRoster); }}>
                 <Download size={16} />
                 Export Excel
               </a>
-            )}
+            ))}
           </div>
         </div>
         {importing && (
@@ -194,7 +170,7 @@ export default function HrRoster({
             <p>
               Use the first sheet for name, email, role, start date and end
               date. Existing email and start-date pairs are skipped. Importing
-              adds rows to the queue for HR to review.
+              makes these interns eligible to start onboarding.
             </p>
             <div className="row">
               <a href={excelUrl("template")} download>
@@ -215,11 +191,11 @@ export default function HrRoster({
                       const d = new FormData();
                       d.set("workbook", file);
                       const result = await request("import-roster", d);
-                      change("pending");
+                      change("awaiting");
                       await refresh();
                       notify(
                         result.added +
-                          " added to the queue. " +
+                          " added to the roster. " +
                           result.skipped +
                           " duplicates skipped.",
                       );
@@ -230,27 +206,32 @@ export default function HrRoster({
             </div>
           </section>
         )}
-        {group !== "received" && (
-          <div className="roster-filters" aria-label="Invitation status">
-            {(["pending", "awaiting"] as const).map((g) => (
-              <button
-                key={g}
-                disabled={busy}
-                aria-pressed={g === group}
-                onClick={() => change(g)}
-              >
-                {titles[g]}{" "}
-                <span>
-                  {g === "pending"
-                    ? pending.length
-                    : rows.length - pending.length - received.length}
-                </span>
-              </button>
-            ))}
+        {group === "awaiting" && sharedUrl && <section className="panel qr-card">
+          <h3>Shared onboarding link</h3>
+          <p>Share this link or QR code with every intern on your roster.</p>
+          <img className="qr" src="/api/qr" alt="Shared onboarding QR code" />
+          <a className="invite-url" href={sharedUrl}>{sharedUrl}</a>
+          <div className="row">
+            <button className="secondary" onClick={()=>run(async()=>{
+              if (navigator.clipboard) {
+                await navigator.clipboard.writeText(sharedUrl);
+                notify("Onboarding link copied.");
+              } else {
+                const link = document.querySelector(".invite-url");
+                const selection = window.getSelection();
+                if (!link || !selection) return;
+                const range = document.createRange();
+                range.selectNodeContents(link);
+                selection.removeAllRanges();
+                selection.addRange(range);
+                notify(document.execCommand("copy") ? "Onboarding link copied." : "The link is selected. Copy it to share.");
+              }
+            })}>Copy link</button>
+            <a href="/api/qr" download="onboarding-qr.png">Download QR</a>
           </div>
-        )}
+        </section>}
         <label className="roster-search">
-          Search {group === "received" ? "submissions" : "invitations"}
+          Search {group === "received" ? "submissions" : "interns"}
           <input
             type="search"
             value={search}
@@ -258,89 +239,25 @@ export default function HrRoster({
             placeholder="Name, email or internship role"
           />
         </label>
-        {group === "pending" && !!pending.length && (
-          <div className="roster-batch">
-            <div className="row">
-              <button
-                className="button"
-                disabled={busy || !chosen.length}
-                onClick={() => run(() => send(chosen))}
-              >
-                <Send size={15} />
-                Send selected ({chosen.length})
-              </button>
-            </div>
-          </div>
-        )}
         {progress && <p role="status">{progress}…</p>}
-        {!!issues.length && (
-          <div className="error" role="alert">
-            <strong>Needs attention</strong>
-            <ul>
-              {issues.map((s, i) => (
-                <li key={i}>{s}</li>
-              ))}
-            </ul>
-          </div>
-        )}
         {visible.length ? (
           <div className="roster-scroll">
             <table>
               <thead>
                 <tr>
-                  {group === "pending" && (
-                    <th>
-                      <input
-                        type="checkbox"
-                        aria-label="Select all invitations on this page"
-                        ref={input => { if (input) input.indeterminate = selectedHere > 0 && !all; }}
-                        checked={all}
-                        disabled={busy || !visible.length}
-                        onChange={() => {
-                          const pageIds = visible.map(r => r.id);
-                          setSelected(ids => all
-                            ? ids.filter(id => !pageIds.includes(id))
-                            : [...new Set([...ids, ...pageIds])]);
-                        }}
-                      />
-                    </th>
-                  )}
                   <th>Intern</th>
                   <th>Internship</th>
-                  {group !== "pending" && <th>Status</th>}
-                  <th>
-                    {group === "received"
-                      ? "Received"
-                      : group === "awaiting"
-                        ? "Invitation"
-                        : "Send"}
-                  </th>
+                  <th>Status</th>
+                  {group==="received" && <th>Received</th>}
                 </tr>
               </thead>
               <tbody>
                 {visible.map((r) => (
                   <tr key={r.id}>
-                    {group === "pending" && (
-                      <td>
-                        <input
-                          type="checkbox"
-                          aria-label={"Select " + r.email}
-                          checked={selected.includes(r.id)}
-                          disabled={busy}
-                          onChange={() =>
-                            setSelected((ids) =>
-                              ids.includes(r.id)
-                                ? ids.filter((id) => id !== r.id)
-                                : [...ids, r.id],
-                            )
-                          }
-                        />
-                      </td>
-                    )}
                     <td>
                       <button
                         className="roster-name"
-                        disabled={busy}
+                        disabled={busy || (group === "received" && !permissions.some(p => p === "review" || p === "issue"))}
                         onClick={() => run(() => open(r.id))}
                       >
                         {r.name}
@@ -351,31 +268,8 @@ export default function HrRoster({
                       {r.role}
                       <small>{statusDate(r.starts)}</small>
                     </td>
-                    {group !== "pending" && (
-                      <td><span className="badge">{statuses[r.status]}</span></td>
-                    )}
-                    <td>
-                      {group === "pending" ? (
-                        <button
-                          className="secondary"
-                          disabled={busy}
-                          aria-label={"Send invitation to " + r.email}
-                          onClick={() => run(() => send([r]))}
-                        >
-                          Send
-                        </button>
-                      ) : group === "received" ? (
-                        r.received_at ? (
-                          statusDate(new Date(r.received_at).toISOString())
-                        ) : (
-                          r.reference
-                        )
-                      ) : r.invitation_email_sent_at ? (
-                        "Sent"
-                      ) : (
-                        "In progress"
-                      )}
-                    </td>
+                    <td><span className="badge">{statuses[r.status]}</span></td>
+                    {group==="received" && <td>{r.received_at ? statusDate(r.received_at) : r.reference}</td>}
                   </tr>
                 ))}
               </tbody>
@@ -385,11 +279,7 @@ export default function HrRoster({
           <p className="roster-empty">
             {search
               ? "No matching interns."
-              : group === "pending"
-                ? "No interns waiting for an invitation. Add one or import an Excel workbook."
-                : group === "received"
-                  ? "Submitted applications will appear here for review."
-                  : "No invitations are awaiting documents."}
+              : group === "received" ? "Submitted applications will appear here." : "Import an Excel sheet or add an intern to start."}
           </p>
         )}
         <nav className="roster-paging" aria-label={titles[group] + " pagination"}>

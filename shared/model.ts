@@ -32,6 +32,7 @@ export type Invitation = {
   reference: string | null;
   correction: { slot: string; message: string; previous: string } | null;
   issued_file: string | null;
+  access_revoked_at: string | null;
   invitation_email_sent_at: string | null;
   notified_at: string | null;
   files: Doc[];
@@ -39,8 +40,8 @@ export type Invitation = {
   version: string;
 };
 export const statuses: Record<string, string> = {
-  queued: "To invite",
-  invited: "Invited",
+  queued: "Ready to start",
+  invited: "Ready to start",
   draft: "In progress",
   submitted: "In review",
   correction: "Correction requested",
@@ -118,8 +119,5 @@ export function rosterGroup(
     ["submitted", "correction", "issued"].includes(row.status)
   )
     return "received";
-  return !row.invitation_email_sent_at &&
-    ["queued", "invited"].includes(row.status)
-    ? "pending"
-    : "awaiting";
+  return "awaiting";
 }

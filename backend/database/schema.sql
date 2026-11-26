@@ -30,3 +30,23 @@ CREATE TABLE IF NOT EXISTS events (
  id bigserial PRIMARY KEY, invitation uuid REFERENCES invitations(id), action text NOT NULL, detail jsonb NOT NULL, created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE TABLE IF NOT EXISTS hr_login (account text PRIMARY KEY, failures integer DEFAULT 0, since timestamptz DEFAULT now());
+CREATE TABLE IF NOT EXISTS hr_staff (
+ email text PRIMARY KEY, password_hash text NOT NULL, access_key_hash text NOT NULL,
+ permissions text[] NOT NULL DEFAULT '{}', enabled boolean NOT NULL DEFAULT true,
+ credential_version integer NOT NULL DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS hr_assignments (
+ staff text NOT NULL REFERENCES hr_staff(email), invitation uuid NOT NULL REFERENCES invitations(id),
+ PRIMARY KEY(staff, invitation)
+);
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS staff text REFERENCES hr_staff(email);
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS credential_version integer;
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS verified_at timestamptz;
+ALTER TABLE invitations ADD COLUMN IF NOT EXISTS access_revoked_at timestamptz;
+ALTER TABLE invitations ADD COLUMN IF NOT EXISTS qr_expires_at timestamptz;
+ALTER TABLE files ADD COLUMN IF NOT EXISTS clean_digest text;
+CREATE TABLE IF NOT EXISTS hr_access_events (
+ id bigserial PRIMARY KEY, staff text NOT NULL, action text NOT NULL,
+ invitation uuid, file_id uuid, detail jsonb NOT NULL DEFAULT '{}', created_at timestamptz NOT NULL DEFAULT now()
+);
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS method text;

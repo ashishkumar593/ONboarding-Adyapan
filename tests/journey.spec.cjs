@@ -11,11 +11,14 @@ const { PDFDocument, PDFName, PDFRawStream, decodePDFRawStream, StandardFonts } 
 const origin = "http://127.0.0.1:3019";
 const email = "aarya@example.test",
   hrEmail = "hr@example.test";
+const accessKey = crypto.randomBytes(32).toString("hex");
 const password = crypto.randomBytes(24).toString("hex");
 const schema = "test_" + crypto.randomBytes(12).toString("hex");
-let dir, db, server, sample;
+let dir, db, server, sample, scanner;
+let scanReply = "stream: OK";
 async function messages() {
   const outbox = path.join(dir, "mail");
+  await fs.mkdir(outbox,{recursive:true});
   const files = await fs.readdir(outbox);
   return Promise.all(
     files
@@ -41,6 +44,23 @@ test.beforeAll(async () => {
   url.searchParams.set("options", "-c search_path=" + schema);
   dir = await fs.mkdtemp(path.join(os.tmpdir(), "adyapan-test-"));
   const salt = crypto.randomBytes(16).toString("hex");
+  await db.query("INSERT INTO hr_staff(email,password_hash,access_key_hash,permissions) VALUES($1,$2,$3,$4)",
+    [hrEmail,salt+":"+crypto.scryptSync(password,salt,32).toString("hex"),crypto.createHash("sha256").update(accessKey).digest("hex"),["invite","review","issue","export"]]);
+  scanner=require("node:net").createServer(socket=>{
+    let packet=Buffer.alloc(0);
+    socket.on("error",()=>{});
+    socket.on("data",chunk=>{
+      packet=Buffer.concat([packet,chunk]);
+      if (packet.length < 14) return;
+      let pos=10;
+      while (pos+4 <= packet.length) {
+        const size=packet.readUInt32BE(pos); pos+=4;
+        if (!size) {socket.end(scanReply+"\0"); return;}
+        pos+=size;
+      }
+    });
+  });
+  await new Promise(resolve=>scanner.listen(0,"127.0.0.1",resolve));
   server = spawn(
     process.execPath,
     [
@@ -60,6 +80,7 @@ test.beforeAll(async () => {
         PORTAL_MODE: "local",
         APP_ORIGIN: origin,
         DATABASE_URL: url.toString(),
+        CLAMD_URL: "tcp://127.0.0.1:"+scanner.address().port,
         HR_EMAIL: hrEmail,
         HR_PASSWORD_HASH:
           salt + ":" + crypto.scryptSync(password, salt, 32).toString("hex"),
@@ -99,6 +120,7 @@ test.afterAll(async () => {
     server.kill();
     await ended;
   }
+  if (scanner) await new Promise(resolve=>scanner.close(resolve));
   if (db) {
     await db.query("DROP SCHEMA IF EXISTS " + schema + " CASCADE");
     await db.end();
@@ -115,7 +137,7 @@ function personalLink(message) {
     .split("\n")
     .find((line) => line.startsWith(origin + "/apply?invite="));
 }
-async function openFromInbox(page, subject) {
+async function openFromInbox(page, subject, heading = "Your application") {
   const envelope = (await messages()).find(
     (m) => m.to === email && m.subject === subject,
   );
@@ -123,12 +145,12 @@ async function openFromInbox(page, subject) {
   const link = personalLink(envelope);
   await page.goto(link);
   await expect(
-    page.getByRole("heading", { name: "Your personal invitation" }),
+    page.getByRole("heading", { name: "Resume onboarding" }),
   ).toBeVisible();
   expect((await page.request.get("/api/application")).status()).toBe(401);
   await page.getByRole("button", { name: "Open my application" }).click();
   await expect(
-    page.getByRole("heading", { name: "Your application" }),
+    page.getByRole("heading", { name: heading }),
   ).toBeVisible();
   return link;
 }
@@ -138,6 +160,7 @@ test("HR invitation, phone onboarding, correction and idempotent PDF issuance", 
 }) => {
   await hr.goto("/hr");
   await hr.getByLabel("Work email").fill(hrEmail);
+  await hr.getByLabel("Access key",{exact:true}).fill(accessKey);
   await hr
     .getByLabel("Password", { exact: true })
     .fill("incorrect-test-password");
@@ -149,20 +172,20 @@ test("HR invitation, phone onboarding, correction and idempotent PDF issuance", 
   await hr.getByLabel("Password", { exact: true }).fill(password);
   await expect(hr.getByLabel("Authenticator code")).toHaveCount(0);
   await hr.getByRole("button", { name: "Sign in", exact: true }).click();
-  await hr.getByRole("button", { name: "Create invitation" }).click();
+  await hr.getByRole("button", { name: "Add intern" }).click();
   await hr.getByLabel("Intern name").fill("Aarya Test");
-  await hr.getByLabel("Invited email").fill(email);
+  await hr.getByLabel("Registered email").fill(email);
   await hr.getByLabel("Internship role").fill("Product Design Intern");
   await hr.getByLabel("Start date").fill("2027-01-01");
   await hr.getByLabel("End date").fill("2027-03-31");
   await expect(hr.locator('input[type="file"]')).toHaveCount(0);
   await expect(hr.getByText("PAN card", { exact: true })).toBeVisible();
-  await hr.getByRole("button", { name: "Create invitation" }).click();
+  await hr.getByRole("button", { name: "Add intern" }).click();
   await expect(
-    hr.getByRole("heading", { name: "Invitation QR" }),
+    hr.getByRole("heading", { name: "Shared onboarding link" }),
   ).toBeVisible();
   const qrUrl = await hr
-    .getByAltText("Invitation QR for Aarya Test")
+    .getByAltText("Shared onboarding QR code")
     .getAttribute("src");
   const png = PNG.sync.read(await (await hr.request.get(qrUrl)).body());
   const link = jsQR(
@@ -171,11 +194,9 @@ test("HR invitation, phone onboarding, correction and idempotent PDF issuance", 
     png.height,
   ).data;
   expect(link).toBe(await hr.locator(".invite-url").getAttribute("href"));
-  const inviteId = new URL(qrUrl, origin).searchParams.get("id");
-  const mailDir = path.join(dir, "mail");
-  await fs.rename(mailDir, mailDir + "-saved");
-  await fs.writeFile(mailDir, "Simulated mail outage");
-  const createSecond = await hr.request.post(origin + "/api/invite", {
+  expect(link).toBe(origin + "/apply");
+  const inviteId = (await (await hr.request.get("/api/list")).json()).find(r=>r.email===email).id;
+  const createSecond = await hr.request.post(origin + "/api/add-intern", {
     headers: { Origin: origin },
     multipart: {
       name: "Second intern",
@@ -187,34 +208,6 @@ test("HR invitation, phone onboarding, correction and idempotent PDF issuance", 
   });
   expect(createSecond.ok()).toBeTruthy();
   const other = await createSecond.json();
-  expect(other.warning).toContain("Email delivery failed");
-  await fs.unlink(mailDir);
-  await fs.rename(mailDir + "-saved", mailDir);
-  expect(
-    (
-      await hr.request.post("/api/email-invitation", {
-        headers: { Origin: origin },
-        multipart: { id: other.id },
-      })
-    ).ok(),
-  ).toBeTruthy();
-  const otherMail = personalLink(
-    (await messages()).find((m) => m.to === "second@example.test"),
-  );
-  await db.query(
-    "UPDATE email_access_links SET expires_at=now()-interval '1 minute' WHERE invitation=$1",
-    [other.id],
-  );
-  const expired = await hr.request.post("/api/redeem-link", {
-    headers: { Origin: origin },
-    multipart: {
-      token: other.token,
-      access: new URLSearchParams(new URL(otherMail).hash.slice(1)).get(
-        "access",
-      ),
-    },
-  });
-  expect(expired.status()).toBe(401);
   const foreign = crypto.randomUUID();
   await fs.mkdir(path.join(dir, "files"), { recursive: true });
   await fs.writeFile(path.join(dir, "files", foreign), sample.buffer);
@@ -227,10 +220,10 @@ test("HR invitation, phone onboarding, correction and idempotent PDF issuance", 
       baseURL: origin,
     }),
     phone = await first.newPage();
-  const originalMail = await openFromInbox(
-    phone,
-    "Your Adyapan internship invitation",
-  );
+  await phone.goto(link);
+  await phone.getByLabel("Registered email address").fill(email);
+  await phone.getByRole("button",{name:"Continue",exact:true}).click();
+  await expect(phone.getByRole("heading",{name:"Your application"})).toBeVisible();
   expect((await phone.request.get("/api/file?id=" + foreign)).status()).toBe(
     404,
   );
@@ -257,16 +250,10 @@ test("HR invitation, phone onboarding, correction and idempotent PDF issuance", 
       baseURL: origin,
     }),
     intern = await second.newPage();
-  await intern.goto(originalMail);
-  await intern.getByRole("button", { name: "Open my application" }).click();
-  await expect(
-    intern.getByRole("alert").filter({ hasText: "already been used" }),
-  ).toBeVisible();
   await intern.goto(link);
-  await intern.getByRole("link", { name: "Start onboarding" }).click();
   const numberOfMessages = (await messages()).length;
-  for (const address of ["uninvited@example.test", "second@example.test"]) {
-    await intern.getByLabel("Invited email address").fill(address);
+  for (const address of ["uninvited@example.test", "absent@example.test"]) {
+    await intern.getByLabel("Registered email address").fill(address);
     await intern
       .getByRole("button", { name: "Continue", exact: true })
       .click();
@@ -276,12 +263,12 @@ test("HR invitation, phone onboarding, correction and idempotent PDF issuance", 
     expect((await messages()).length).toBe(numberOfMessages);
     expect((await intern.request.get("/api/application")).status()).toBe(401);
   }
-  await intern.getByLabel("Invited email address").fill(email.toUpperCase());
+  await intern.getByLabel("Registered email address").fill(email.toUpperCase());
   await intern.getByRole("button", { name: "Continue", exact: true }).click();
-  await expect(
-    intern.getByRole("heading", { name: "Your documents" }),
-  ).toBeVisible();
-  expect((await messages()).length).toBe(numberOfMessages);
+  await expect(intern.getByText("Check your invited inbox for a fresh personal link.")).toBeVisible();
+  expect((await intern.request.get("/api/application")).status()).toBe(401);
+  await openFromInbox(intern,"Your personal onboarding link","Your documents");
+  await expect(intern.getByRole("heading", { name: "Your documents" })).toBeVisible();
   await expect(
     intern.getByRole("button", { name: "Continue to terms" }),
   ).toBeDisabled();
@@ -345,7 +332,8 @@ test("HR invitation, phone onboarding, correction and idempotent PDF issuance", 
   expect(firstSubmission.drawing[0].length).toBeGreaterThan(1);
   const receipt = await (await intern.request.get("/api/application")).json();
   expect(receipt.reference).toMatch(/^ADY-/);
-  await hr.getByRole("button", { name: "Back to invitation queue" }).click();
+  await hr.reload();
+  await hr.getByRole("button",{name:/Documents received/}).click();
   const [bundleDownload] = await Promise.all([
     hr.waitForEvent("download", { timeout: 8000 }),
     hr.getByRole("button", { name: "Export Excel + documents" }).click(),
@@ -446,6 +434,7 @@ test("HR invitation, phone onboarding, correction and idempotent PDF issuance", 
   await hr.bringToFront();
   await hr.goto("/hr");
   await hr.getByLabel("Work email").fill(hrEmail);
+  await hr.getByLabel("Access key",{exact:true}).fill(accessKey);
   await hr.getByLabel("Password", { exact: true }).fill(password);
   await hr.getByRole("button", { name: "Sign in", exact: true }).click();
   await hr.getByRole("button", { name: /Documents received/ }).click();
@@ -518,7 +507,7 @@ test("welcome fits phone and desktop, and help and stage details open", async ({
       ),
     ).toBeTruthy();
     const preparation = page.getByRole("checkbox", {
-      name: "Access to your invited email",
+      name: "Access to your registered email",
     });
     await preparation.focus();
     await page.keyboard.press("Space");
@@ -531,11 +520,11 @@ test("welcome fits phone and desktop, and help and stage details open", async ({
     await page.getByRole("button", { name: "Close help" }).click();
     await page.locator("summary").first().click();
     await expect(
-      page.getByText("Open the email from Adyapan", { exact: false }),
+      page.locator("details[open]").getByText("Open the shared onboarding link", { exact: false }),
     ).toBeVisible();
   }
 });
-test("Excel roster imports, exports, and sends individual and bulk invitations", async ({
+test("Excel import enables multiple registered interns through one shared link", async ({
   page,
 }) => {
   const Excel = require("exceljs");
@@ -550,6 +539,7 @@ test("Excel roster imports, exports, and sends individual and bulk invitations",
   ).toBe(401);
   await page.goto("/hr");
   await page.getByLabel("Work email").fill(hrEmail);
+  await page.getByLabel("Access key",{exact:true}).fill(accessKey);
   await page.getByLabel("Password", { exact: true }).fill(password);
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await page.getByRole("button", { name: "Import Excel", exact: true }).click();
@@ -605,23 +595,17 @@ test("Excel roster imports, exports, and sends individual and bulk invitations",
   const valid = await asFile();
   await page.getByLabel("Import Excel workbook").setInputFiles(valid);
   await expect(
-    page.getByText("3 added to the queue. 0 duplicates skipped."),
+    page.getByText("3 added to the roster. 0 duplicates skipped."),
   ).toBeVisible();
   await page.getByRole("button", { name: "Import Excel", exact: true }).click();
   await page.getByLabel("Import Excel workbook").setInputFiles(valid);
   await expect(
-    page.getByText("0 added to the queue. 3 duplicates skipped."),
+    page.getByText("0 added to the roster. 3 duplicates skipped."),
   ).toBeVisible();
   expect((await messages()).length).toBe(before);
   const records = (await (await page.request.get("/api/list")).json()).filter(
     (r) => people.some((p) => p.email === r.email),
   );
-  const unscoped = await page.request.post("/api/verify-invitation", {
-    headers: { Origin: origin },
-    multipart: { email: people[0].email },
-  });
-  expect(unscoped.ok()).toBe(false);
-  expect((await messages()).length).toBe(before);
   const pendingFile = await page.request.get(
     await page.getByRole("link", { name: "Export Excel" }).getAttribute("href"),
   );
@@ -630,39 +614,16 @@ test("Excel roster imports, exports, and sends individual and bulk invitations",
   expect(pendingBook.worksheets[0].getColumn(2).values).toContain(
     people[2].email,
   );
-  await page.getByRole("button", { name: people[0].name, exact: true }).click();
-  const qr = page.getByAltText("Invitation QR for " + people[0].name);
-  const pendingLink = await page.locator(".invite-url").getAttribute("href");
-  const png = PNG.sync.read(await (await page.request.get(await qr.getAttribute("src"))).body());
-  expect(jsQR(new Uint8ClampedArray(png.data), png.width, png.height).data).toBe(pendingLink);
-  const landing = await page.context().newPage();
-  await landing.goto(pendingLink);
-  await expect(landing.getByRole("heading", { name: "Your invitation is pending" })).toBeVisible();
-  await page.getByRole("button", { name: "Back to invitation queue" }).click();
-  await page
-    .getByRole("button", { name: "Send invitation to " + people[0].email })
-    .click();
-  await expect(page.getByText("1 sent.", { exact: true })).toBeVisible();
-  await landing.reload();
-  await expect(landing.getByRole("link", { name: "Start onboarding" })).toBeVisible();
-  await landing.close();
-  await page.getByLabel("Search invitations").fill("Oak");
-  await page.getByLabel("Select all invitations on this page").check();
-  await page.getByRole("button", { name: "Send selected (2)" }).click();
-  await expect(page.getByText("2 sent.", { exact: true })).toBeVisible();
-  for (const r of records) {
-    const repeated = await page.request.post("/api/send-queued", {
-      headers: { Origin: origin },
-      multipart: { id: r.id },
-    });
-    expect(await repeated.json()).toEqual({ sent: false });
-    expect(
-      (await messages()).filter(
-        (m) => m.to === r.email && m.subject.includes("internship invitation"),
-      ),
-    ).toHaveLength(1);
+  const sharedLink=await page.getByRole("link",{name:origin+"/apply"}).getAttribute("href");
+  for(const person of people){
+    const browser=await page.context().browser().newContext({baseURL:origin});
+    const intern=await browser.newPage(); await intern.goto(sharedLink);
+    await intern.getByLabel("Registered email address").fill(person.email.toUpperCase());
+    await intern.getByRole("button",{name:"Continue",exact:true}).click();
+    await expect(intern.getByLabel("Email address")).toHaveValue(person.email);
+    await browser.close();
   }
-  await page.getByRole("button", { name: /Awaiting documents/ }).click();
+  expect((await messages()).length).toBe(before);
   for (const p of people)
     await expect(
       page.getByRole("button", { name: p.name, exact: true }),
@@ -684,21 +645,16 @@ test("HR pages through invitation and received records", async ({ page }) => {
   );
   await page.goto("/hr");
   await page.getByLabel("Work email").fill(hrEmail);
+  await page.getByLabel("Access key",{exact:true}).fill(accessKey);
   await page.getByLabel("Password", { exact: true }).fill(password);
   await page.route("**/api/list", route => route.fulfill({ json: rows }));
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await expect(page).toHaveTitle("Adyapan | Onboarding Portal");
   const tableRows = page.locator("tbody tr");
   const next = page.getByRole("button", { name: "Next", exact: true });
-  const selectPage = page.getByLabel("Select all invitations on this page");
   await expect(tableRows).toHaveCount(10);
-  await selectPage.check();
   await next.click();
   await expect(tableRows).toHaveCount(2);
-  await selectPage.check();
-  await expect(page.getByRole("button", { name: "Send selected (12)" })).toBeEnabled();
-  await selectPage.uncheck();
-  await expect(page.getByRole("button", { name: "Send selected (10)" })).toBeEnabled();
   await page.getByRole("button", { name: /Documents received/ }).click();
   await expect(tableRows).toHaveCount(10);
   await page.getByLabel("Rows per page").selectOption("5");
@@ -710,4 +666,77 @@ test("HR pages through invitation and received records", async ({ page }) => {
   await expect(tableRows).toHaveCount(1);
   await expect(tableRows).toContainText("submitted intern 3");
   await expect(page.getByText("Page 1 of 1", { exact: true })).toBeVisible();
+});
+test("named HR credentials, assignments, freshness and intern revocation", async ({playwright})=>{
+  const hr=await playwright.request.newContext({baseURL:origin});
+  const reviewer=await playwright.request.newContext({baseURL:origin});
+  const intern=await playwright.request.newContext({baseURL:origin});
+  const post=(client,action,fields)=>client.post("/api/"+action,{headers:{Origin:origin},multipart:fields});
+  const reviewerEmail="reviewer@example.test";
+  await db.query("INSERT INTO hr_staff(email,password_hash,access_key_hash,permissions) SELECT $1,password_hash,access_key_hash,ARRAY['review'] FROM hr_staff WHERE email=$2",[reviewerEmail,hrEmail]);
+  try {
+    expect((await post(hr,"hr-login",{email:hrEmail,password})).ok()).toBeFalsy();
+    expect((await post(hr,"hr-login",{email:hrEmail,password,accessKey:"wrong-key"})).status()).toBe(401);
+    expect((await post(hr,"hr-login",{email:hrEmail,password,accessKey})).ok()).toBeTruthy();
+    expect((await post(reviewer,"hr-login",{email:reviewerEmail,password,accessKey})).ok()).toBeTruthy();
+    const invitation=await (await post(hr,"add-intern",{name:"Security Test",email:"scope@example.test",role:"Intern",starts:"2027-02-01",ends:"2027-03-01"})).json();
+    const {id}=invitation;
+    expect(id).toBeTruthy();
+    expect((await reviewer.get("/api/record?id="+id)).status()).toBe(404);
+    expect((await reviewer.get("/api/received-export")).status()).toBe(403);
+    expect((await post(intern,"roster-login",{email:"scope@example.test"})).ok()).toBeTruthy();
+    scanReply="stream: screening-test FOUND";
+    expect((await post(intern,"upload",{invitation:id,slot:"resume",file:sample})).status()).toBe(422);
+    scanReply="stream: scanner unavailable ERROR";
+    expect((await post(intern,"upload",{invitation:id,slot:"resume",file:sample})).status()).toBe(503);
+    expect((await db.query("SELECT count(*)::int AS n FROM files WHERE invitation=$1",[id])).rows[0].n).toBe(0);
+    scanReply="stream: OK";
+    expect((await post(intern,"upload",{invitation:id,slot:"resume",file:sample})).ok()).toBeTruthy();
+    const file=(await db.query("SELECT id FROM files WHERE invitation=$1",[id])).rows[0].id;
+    expect((await reviewer.get("/api/file?hr=1&id="+file)).status()).toBe(404);
+    await db.query("INSERT INTO hr_assignments(staff,invitation) VALUES($1,$2)",[reviewerEmail,id]);
+    expect((await post(reviewer,"issue",{id})).status()).toBe(403);
+    await db.query("UPDATE invitations SET status='submitted',reference='ADY-SCOPE-CHECK' WHERE id=$1",[id]);
+    expect((await reviewer.get("/api/file?hr=1&id="+file)).status()).toBe(200);
+    const bundle = await (await hr.get("/api/received-export")).json();
+    expect(bundle.files.some(f=>f.id===file)).toBe(true);
+    expect((await hr.get("/api/received-export-file?id="+file)).ok()).toBeTruthy();
+    expect((await db.query("SELECT staff FROM hr_access_events WHERE action='file exported' AND file_id=$1",[file])).rows[0].staff).toBe(hrEmail);
+    expect((await post(hr,"revoke",{id})).ok()).toBeTruthy();
+    expect((await intern.get("/api/application")).status()).toBe(401);
+    expect((await post(intern,"roster-login",{email:"scope@example.test"})).status()).toBe(401);
+    expect((await post(hr,"restore",{id})).ok()).toBeTruthy();
+    expect(await (await post(intern,"roster-login",{email:"scope@example.test"})).json()).toEqual({emailSent:true});
+    expect((await intern.get("/api/application")).status()).toBe(401);
+    await db.query("UPDATE sessions SET verified_at=now()-interval '11 minutes' WHERE staff=$1",[hrEmail]);
+    expect((await hr.get("/api/received-export")).status()).toBe(428);
+    expect((await post(hr,"issue",{id})).status()).toBe(428);
+    await db.query("UPDATE hr_staff SET enabled=false WHERE email=$1",[reviewerEmail]);
+    expect((await reviewer.get("/api/list")).status()).toBe(401);
+  } finally {
+    scanReply="stream: OK";
+    await Promise.all([hr.dispose(),reviewer.dispose(),intern.dispose()]);
+  }
+});
+test("private storage maintenance preserves submitted and latest files",async()=>{
+  const {execFile}=require("node:child_process"),exec=require("node:util").promisify(execFile);
+  const {id}= (await db.query("INSERT INTO invitations(id,token,name,email,role,starts,ends,requirements,status) VALUES($1,$2,'Retention','retention@example.test','Intern',current_date,current_date,'[]','draft') RETURNING id",[crypto.randomUUID(),crypto.randomBytes(24).toString("base64url")])).rows[0];
+  const obsolete=crypto.randomUUID(),latest=crypto.randomUUID(),orphan=crypto.randomUUID();
+  const folder=path.join(dir,"files"); await fs.mkdir(folder,{recursive:true});
+  for(const key of [obsolete,latest,orphan]){
+    await fs.writeFile(path.join(folder,key),sample.buffer);
+    const old=new Date(Date.now()-40*86400000);
+    await fs.utimes(path.join(folder,key),old,old);
+  }
+  await db.query("INSERT INTO files(id,invitation,slot,name,mime,bytes,created_at) VALUES ($1,$2,'resume','old.pdf','application/pdf',10,now()-interval '40 days'),($3,$2,'resume','latest.pdf','application/pdf',10,now()-interval '35 days')",[obsolete,id,latest]);
+  const database=new URL(process.env.DATABASE_URL); database.searchParams.set("options","-c search_path="+schema);
+  const env={...process.env,DATABASE_URL:database.toString(),S3_BUCKET:"",PORTAL_MODE:"local",PRIVATE_DIR:folder};
+  const dry=await exec(process.execPath,["scripts/reconcile-storage.mjs"],{env});
+  expect(JSON.parse(dry.stdout).supersededDraftVersions).toBe(1);
+  expect(await fs.readFile(path.join(folder,obsolete))).toEqual(sample.buffer);
+  const applied=await exec(process.execPath,["scripts/reconcile-storage.mjs","--apply"],{env});
+  expect(JSON.parse(applied.stdout).unreferencedObjects).toBe(2);
+  expect(await fs.readFile(path.join(folder,latest))).toEqual(sample.buffer);
+  await expect(fs.stat(path.join(folder,orphan))).rejects.toThrow();
+  await expect(fs.stat(path.join(folder,obsolete))).rejects.toThrow();
 });

@@ -1,8 +1,10 @@
+import { screenDocument } from "./screen";
+import { assigned, type StaffSession } from "./auth";
 import crypto from "node:crypto";
 import type { PoolClient } from "pg";
 import { details, event, requireThat, transaction } from "./db";
-import { put, get, upload } from "./private";
-import { emailInvitation, sendAccessMail } from "./access-mail";
+import { put, get, upload, contentDigest } from "./private";
+import { sendAccessMail } from "./access-mail";
 import { countersign, requireSignedOffer } from "./issue";
 import {
   termsAcknowledgement,
@@ -38,8 +40,8 @@ export async function storeFile(
   const id = crypto.randomUUID();
   await put(id, file.data, file.mime);
   await db.query(
-    "INSERT INTO files(id,invitation,slot,name,mime,bytes) VALUES($1,$2,$3,$4,$5,$6)",
-    [id, inv, slot, file.name, file.mime, file.data.length],
+    "INSERT INTO files(id,invitation,slot,name,mime,bytes,clean_digest) VALUES($1,$2,$3,$4,$5,$6,$7)",
+    [id, inv, slot, file.name, file.mime, file.data.length, contentDigest(file.data)],
   );
   return id;
 }
@@ -63,6 +65,7 @@ export function invitationFields(data: FormData) {
 export async function queueInvite(
   db: PoolClient,
   values: ReturnType<typeof invitationFields>,
+  actor: string,
 ) {
   const { name, email, role, starts, ends } = values;
   await db.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [
@@ -92,33 +95,16 @@ export async function queueInvite(
       JSON.stringify(standardDocuments),
     ],
   );
-  await event(db, id, "queued", { actor: process.env.HR_EMAIL });
+  await db.query("INSERT INTO hr_assignments(staff,invitation) VALUES($1,$2)",[actor,id]);
+  await event(db, id, "queued", { actor });
   return { id, token };
 }
-export async function createInvite(data: FormData) {
-  const values = invitationFields(data),
-    queued = data.get("delivery") === "queue";
-  const { id, token } = await transaction(async (db) => {
-    const created = await queueInvite(db, values);
-    requireThat(
-      created,
-      "This email and start date already exist in the workspace.",
-      409,
-    );
-    return created;
+export async function createInvite(data: FormData, actor: string) {
+  return transaction(async db => {
+    const row = await queueInvite(db,invitationFields(data),actor);
+    requireThat(row,"This intern and start date already exist.",409);
+    return { id: row.id };
   });
-  if (queued) return { id, token, queued: true };
-  try {
-    await emailInvitation(id, true);
-    return { id, token };
-  } catch {
-    return {
-      id,
-      token,
-      warning:
-        "Invitation saved. Email delivery failed. Use Send invitation email to retry.",
-    };
-  }
 }
 const editable = (inv: Invitation) =>
   requireThat(
@@ -163,6 +149,9 @@ export async function internAction(id: string, action: string, data: FormData) {
       else editable(inv);
       const file = await upload(data.get("file"), slot === "signed" || isResume(requirement));
       if (slot === "signed") requireSignedOffer(file.data);
+      const usage = (await db.query("SELECT count(*)::int AS versions,coalesce(sum(bytes),0)::bigint AS bytes FROM files WHERE invitation=$1 AND slot NOT IN ('issued','original')",[id])).rows[0];
+      requireThat(usage.versions < 48 && Number(usage.bytes) + file.data.length <= 128 * 1024 * 1024,
+        "Upload limit reached. Contact HR to review your stored versions.", 413);
       await storeFile(db, id, slot, file);
     } else if (action === "submit") {
       if (["submitted", "issued"].includes(inv.status))
@@ -241,9 +230,10 @@ export async function internAction(id: string, action: string, data: FormData) {
     return details(db, id);
   });
 }
-export async function review(id: string, action: string, data: FormData) {
+export async function review(id: string, action: string, data: FormData, staff: StaffSession) {
   const inv = await transaction(async (db) => {
     const inv = await details(db, id, true);
+    await assigned(staff,id,db);
     if (action === "correct" || (action === "issue" && inv.status !== "issued"))
       requireThat(
         data.get("revision") === inv.revision,
@@ -270,7 +260,7 @@ export async function review(id: string, action: string, data: FormData) {
       );
       await event(db, id, "correction", {
         ...correction,
-        actor: process.env.HR_EMAIL,
+        actor: staff.staff,
       });
     } else if (action === "issue") {
       if (inv.status === "issued") return inv;
@@ -285,7 +275,8 @@ export async function review(id: string, action: string, data: FormData) {
         "Reopen the latest signed offer before issuing.",
         409,
       );
-      const bytes = await countersign(await get(signed.id), inv);
+      const bytes = await countersign(await get(signed.id,db), inv);
+      await screenDocument(Buffer.from(bytes));
       const issued = await storeFile(db, id, "issued", {
         data: bytes,
         mime: "application/pdf",
@@ -298,7 +289,7 @@ export async function review(id: string, action: string, data: FormData) {
       await event(db, id, "issued", {
         source: signed.id,
         issued,
-        actor: process.env.HR_EMAIL,
+        actor: staff.staff,
       });
     } else
       requireThat(
@@ -308,7 +299,7 @@ export async function review(id: string, action: string, data: FormData) {
       );
     return details(db, id);
   });
-  if (inv.status === "issued" && inv.notified_at) return inv;
+  if (inv.status === "issued" && inv.notified_at) return { ok: true };
   try {
     await transaction(async (db) => {
       const current = await details(db, id, true);
@@ -333,10 +324,9 @@ export async function review(id: string, action: string, data: FormData) {
     });
   } catch {
     return {
-      ...inv,
       warning:
         "The review was saved. Email delivery failed. Use Send notification to retry.",
     };
   }
-  return inv;
+  return { ok: true };
 }

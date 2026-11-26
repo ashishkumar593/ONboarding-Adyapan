@@ -1,3 +1,4 @@
+import type { StaffSession } from "./auth";
 import ExcelJS from "exceljs";
 import { fromBuffer } from "yauzl";
 import { pool, Problem, requireThat, transaction } from "./db";
@@ -11,26 +12,29 @@ const fields = [
   ["starts", "Start date", 17],
   ["ends", "End date", 17],
 ] as const;
-export async function roster(): Promise<RosterRow[]> {
+export async function roster(user: StaffSession): Promise<RosterRow[]> {
   return (
     await pool.query(`SELECT i.id,coalesce(nullif(i.draft->>'name',''),i.name) AS name,i.email,i.role,i.starts,i.ends,i.status,
     i.reference,i.invitation_email_sent_at,i.draft->>'employeeId' AS employee_id,
     (SELECT max(s.created_at) FROM submissions s WHERE s.invitation=i.id) AS received_at
-    FROM invitations i ORDER BY i.created_at DESC, i.id`)
+    FROM invitations i JOIN hr_assignments a ON a.invitation=i.id AND a.staff=$1
+    WHERE CASE WHEN i.reference IS NOT NULL OR i.status IN ('submitted','correction','issued')
+      THEN $2::boolean ELSE $3::boolean END ORDER BY i.created_at DESC, i.id`,[user.staff,
+      user.permissions.some(p=>p==="review" || p==="issue" || p==="export"),user.permissions.includes("invite")])
   ).rows;
 }
 
-export async function exportRoster(group: string) {
+export async function exportRoster(group: string, user: StaffSession) {
+  if (group === "pending") group = "awaiting";
   requireThat(
-    ["pending", "awaiting", "received", "template"].includes(group),
+    ["awaiting", "received", "template"].includes(group),
     "Select a list to export.",
   );
   const workbook = new ExcelJS.Workbook();
   const titles: Record<string, string> = {
-    pending: "Invitation queue",
-    awaiting: "Awaiting documents",
+    awaiting: "Intern roster",
     received: "Documents received",
-    template: "Invitations",
+    template: "Intern roster",
   };
   const sheet = workbook.addWorksheet(titles[group], {
     views: [{ state: "frozen", ySplit: 1 }],
@@ -50,7 +54,7 @@ export async function exportRoster(group: string) {
       });
       sheet.getColumn(9).numFmt = "yyyy-mm-dd hh:mm";
     }
-    for (const row of (await roster()).filter(
+    for (const row of (await roster(user)).filter(
       (row) => rosterGroup(row) === group,
     )) {
       const values = [
@@ -59,7 +63,7 @@ export async function exportRoster(group: string) {
         row.role,
         new Date(row.starts + "T00:00:00Z"),
         new Date(row.ends + "T00:00:00Z"),
-        group === "pending" ? "To invite" : statuses[row.status],
+        statuses[row.status],
       ];
       if (group === "received")
         values.push(row.employee_id || "", row.reference || "", row.received_at ? new Date(row.received_at) : "");
@@ -161,7 +165,7 @@ function cellText(
     "Use plain text or an Excel date in cell " + cell.address + ".",
   );
 }
-export async function importRoster(data: FormData) {
+export async function importRoster(data: FormData, actor: string) {
   const file = data.get("workbook");
   requireThat(
     file instanceof File &&
@@ -227,7 +231,7 @@ export async function importRoster(data: FormData) {
   );
   return transaction(async (db) => {
     let added = 0;
-    for (const row of rows) if (await queueInvite(db, row)) added++;
+    for (const row of rows) if (await queueInvite(db, row, actor)) added++;
     return { added, skipped: rows.length - added };
   });
 }

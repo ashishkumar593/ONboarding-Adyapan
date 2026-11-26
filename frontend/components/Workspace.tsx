@@ -2,12 +2,10 @@
 import { useEffect, useState } from "react";
 import {
   BriefcaseBusiness,
-  Copy,
   FileText,
-  Printer,
   ShieldCheck,
 } from "lucide-react";
-import { request, fileUrl, form } from "./client";
+import { request, fileUrl, form, RequestError } from "./client";
 import {
   standardDocuments,
   rosterGroup,
@@ -19,8 +17,10 @@ import {
 } from "@shared/model";
 import HrRoster, { type RosterView } from "./HrRoster";
 import IssuedOffer from "./IssuedOffer";
-const initialView: RosterView = { group: "pending", search: "", page: 1, size: 10 };
+import type { Permission } from "@shared/hr";
+const initialView: RosterView = { group: "awaiting", search: "", page: 1, size: 10 };
 export default function Workspace() {
+  const [permissions, setPermissions] = useState<Permission[]>([]);
   const [rows, setRows] = useState<RosterRow[] | null>(null),
     [inv, setInv] = useState<Invitation | null>(null),
     [create, setCreate] = useState(false),
@@ -29,9 +29,11 @@ export default function Workspace() {
     [loading, setLoading] = useState(true),
     [error, setError] = useState(""),
     [notice, setNotice] = useState(""),
-    [view, setView] = useState(initialView),
-    [queueOnly, setQueueOnly] = useState(false);
+    [view, setView] = useState(initialView);
   async function list() {
+    const me: { permissions: Permission[] } = await request("me");
+    setPermissions(me.permissions);
+    if (!me.permissions.includes("invite")) setView(v=>({...v,group:"received"}));
     const records: RosterRow[] = await request("list");
     setRows(records);
     setOrigin((await request("origin")).origin);
@@ -55,6 +57,9 @@ export default function Workspace() {
     try {
       await job();
     } catch (e) {
+      if (e instanceof RequestError && [401,428].includes(e.status)) {
+        setRows(null); setInv(null); setCreate(false); setPermissions([]);
+      }
       setError((e as Error).message);
     } finally {
       setWorking(false);
@@ -75,7 +80,7 @@ export default function Workspace() {
             : "Notification sent."),
     );
   }
-  const url = inv ? origin + "/i/" + inv.token : "";
+
   const signedOffer = inv?.files.find(f => f.slot === "signed");
   const received = inv && rosterGroup(inv) === "received";
   return (
@@ -104,8 +109,7 @@ export default function Workspace() {
           <div className="eyebrow">People Operations</div>
           <h1>HR sign in</h1>
           <p>
-            Sign in with your work email and password to manage internship
-            invitations.
+            Sign in with your work email, password and personal access key to manage onboarding.
           </p>
           <form
             onSubmit={(e) => {
@@ -134,6 +138,10 @@ export default function Workspace() {
                 name="password"
                 autoComplete="current-password"
               />
+            </label>
+            <label>
+              Access key
+              <input required name="accessKey" type="password" autoComplete="off" maxLength={256} spellCheck={false} />
             </label>
             <button className="button" disabled={working}>
               Sign in
@@ -169,28 +177,17 @@ export default function Workspace() {
           {create ? (
             <section className="panel hr-form">
               <button className="textbtn" onClick={() => setCreate(false)}>
-                Back to invitations
+                Back to roster
               </button>
-              <h2>Create invitation</h2>
+              <h2>Add intern</h2>
               <form
                 onSubmit={(e) => {
                   e.preventDefault();
                   const data = new FormData(e.currentTarget);
-                  if (queueOnly) data.set("delivery", "queue");
                   void run(async () => {
-                    const result = await request("invite", data);
-                    await list();
-                    if (result.queued) {
-                      setCreate(false);
-                      setView({ ...view, group: "pending", search: "", page: 1 });
-                      setNotice("Intern added to the invitation queue.");
-                      return;
-                    }
-                    await open(result.id);
-                    setNotice(
-                      result.warning ||
-                        "Invitation email sent to " + data.get("email") + ".",
-                    );
+                    await request("add-intern", data);
+                    await list(); setCreate(false); setView(initialView);
+                    setNotice("Intern added to the roster.");
                   });
                 }}
               >
@@ -200,7 +197,7 @@ export default function Workspace() {
                     <input name="name" required />
                   </label>
                   <label>
-                    Invited email
+                    Registered email
                     <input name="email" type="email" required />
                   </label>
                 </div>
@@ -218,27 +215,6 @@ export default function Workspace() {
                     <input type="date" name="ends" required />
                   </label>
                 </div>
-                <fieldset className="delivery-choice">
-                  <legend>Invitation delivery</legend>
-                  <label className="check">
-                    <input
-                      type="radio"
-                      name="deliveryChoice"
-                      checked={!queueOnly}
-                      onChange={() => setQueueOnly(false)}
-                    />
-                    Send now
-                  </label>
-                  <label className="check">
-                    <input
-                      type="radio"
-                      name="deliveryChoice"
-                      checked={queueOnly}
-                      onChange={() => setQueueOnly(true)}
-                    />
-                    Save to invitation queue
-                  </label>
-                </fieldset>
                 <fieldset>
                   <legend>Required uploads for every intern</legend>
                   <ul>
@@ -248,7 +224,7 @@ export default function Workspace() {
                   </ul>
                 </fieldset>
                 <button disabled={working} className="button">
-                  {queueOnly ? "Save to queue" : "Create invitation"}
+                  Add intern
                 </button>
               </form>
             </section>
@@ -266,7 +242,7 @@ export default function Workspace() {
                   })
                 }
               >
-                {received ? "Back to documents received" : "Back to invitation queue"}
+                {received ? "Back to documents received" : "Back to roster"}
               </button>
               <div className={received ? "hr-review" : "hr-grid"}>
                 <section className="panel">
@@ -296,6 +272,7 @@ export default function Workspace() {
                       </div>
                     ))}
                   </dl>
+                  {received && <>
                   <h3 className="spaced">Intern-signed offer</h3>
                   <div className="proof">
                     {signedOffer ? (
@@ -309,7 +286,7 @@ export default function Workspace() {
                     ) : <small>Awaiting upload</small>}
                   </div>
                   {inv.requirements
-                    .filter((r) => r.id !== "signed")
+                    .filter((r) => permissions.includes("review") && r.id !== "signed")
                     .map((r) => {
                       const f = inv.files.find((f) => f.slot === r.id);
                       return (
@@ -329,7 +306,8 @@ export default function Workspace() {
                         </p>
                       );
                     })}
-                  {inv.status === "submitted" && (
+                  </>}
+                  {inv.status === "submitted" && permissions.includes("review") && (
                     <>
                       <hr />
                       <h3>Request a correction</h3>
@@ -358,6 +336,10 @@ export default function Workspace() {
                           Request correction
                         </button>
                       </form>
+                    </>
+                  )}
+                  {inv.status === "submitted" && permissions.includes("issue") && (
+                    <>
                       <hr />
                       <h3>Issue final offer</h3>
                       <form
@@ -407,79 +389,19 @@ export default function Workspace() {
                       Send notification
                     </button>
                   )}
+                  {permissions.includes("invite") && <button className="secondary" disabled={working} onClick={()=>run(async()=>{
+                    const action = inv.access_revoked_at ? "restore" : "revoke";
+                    if (!window.confirm(action === "revoke" ? "Revoke this intern's portal access and active sessions?" : "Restore access through the shared onboarding link?")) return;
+                    await request(action,form({id:inv.id})); await open(inv.id);
+                    setNotice(action === "revoke" ? "Intern access revoked." : "Intern access restored.");
+                  })}>{inv.access_revoked_at ? "Restore intern access" : "Revoke intern access"}</button>}
                 </section>
-                {!received && (
-                  <aside className="panel qr-card">
-                    <div className="eyebrow">Adyapan Onboarding Portal</div>
-                    <h2>
-                      {inv.status === "queued"
-                        ? "Pending invitation"
-                        : "Invitation QR"}
-                    </h2>
-                    <p>
-                      {inv.name} · {inv.role}
-                    </p>
-                    <p>
-                      {inv.invitation_email_sent_at
-                        ? "Last invitation email sent to " + inv.email
-                        : "Invitation email pending for " + inv.email}
-                    </p>
-                    <button
-                      className="secondary"
-                      disabled={working}
-                      onClick={() =>
-                        run(async () => {
-                          await request("email-invitation", form({ id: inv.id }));
-                          await open(inv.id);
-                          setNotice(
-                            "Invitation email sent to " + inv.email + ".",
-                          );
-                        })
-                      }
-                    >
-                      {inv.invitation_email_sent_at
-                        ? "Resend invitation email"
-                        : "Send invitation email"}
-                    </button>
-                    <img
-                      className="qr"
-                      alt={"Invitation QR for " + inv.name}
-                      src={"/api/qr?id=" + inv.id}
-                    />
-                    <a className="invite-url" href={url}>
-                      {url}
-                    </a>
-                    <div className="row">
-                      <button
-                        className="secondary"
-                        onClick={() => window.print()}
-                      >
-                        <Printer size={15} /> Print QR
-                      </button>
-                      <button
-                        className="secondary"
-                        onClick={() =>
-                          run(async () => {
-                            if (navigator.clipboard) {
-                              await navigator.clipboard.writeText(url);
-                              setNotice("Invitation link copied.");
-                            } else {
-                              setNotice(
-                                "Select and copy the invitation link above.",
-                              );
-                            }
-                          })
-                        }
-                      >
-                        <Copy size={15} /> Copy link
-                      </button>
-                    </div>
-                  </aside>
-                )}
               </div>
             </>
           ) : (
             <HrRoster
+              sharedUrl={origin ? new URL("/apply",origin).href : ""}
+              permissions={permissions}
               rows={rows}
               view={view}
               setView={setView}
@@ -491,7 +413,7 @@ export default function Workspace() {
               open={open}
               notify={setNotice}
               create={() => {
-                setQueueOnly(false);
+                
                 setCreate(true);
                 setError("");
                 setNotice("");

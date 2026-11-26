@@ -61,16 +61,10 @@ export function Header() {
             <X />
           </button>
         </div>
-        <h3>Where is my invitation email?</h3>
-        <p>
-          Look for an invitation from Adyapan in the inbox HR invited. Check
-          spam, or ask HR for your invitation QR code.
-        </p>
+        <h3>How do I start?</h3>
+        <p>Open the shared onboarding link or scan the QR from HR and enter your registered email.</p>
         <h3>Can I finish later?</h3>
-        <p>
-          Yes. Reopen your invitation or scan your QR code and enter the invited
-          email address to resume on another device.
-        </p>
+        <p>Yes. Reopen the shared link. If your session has expired, check your registered inbox to resume.</p>
         <h3>When is my letter ready?</h3>
         <p>
           People Operations will review your signed offer. You’ll receive an

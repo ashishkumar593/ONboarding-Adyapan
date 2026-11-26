@@ -3,9 +3,9 @@ import { useEffect, useState } from "react";
 import { Check, ListChecks } from "lucide-react";
 
 const items = [
-  "Access to your invited email",
+  "Access to your registered email",
   "Your signed offer letter (PDF)",
-  "Supporting documents on your invitation",
+  "Your academic and identity documents",
 ];
 
 export default function ReadinessChecklist({

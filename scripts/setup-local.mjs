@@ -128,7 +128,24 @@ try {
     );
     row = { token };
   }
-  const url = process.env.APP_ORIGIN + "/i/" + row.token;
+  // Only the local pilot adopts its existing records on the first credential upgrade.
+  const staffEmail = process.env.HR_EMAIL;
+  if (!(await db.query("SELECT 1 FROM hr_staff WHERE email=$1",[staffEmail])).rowCount) {
+    const secretFile = path.join(dir,"hr-access-key.txt");
+    let key;
+    try { key=(await fs.readFile(secretFile,"utf8")).trim(); }
+    catch (e) {
+      if (e.code !== "ENOENT") throw e;
+      key=crypto.randomBytes(32).toString("base64url");
+      await fs.writeFile(secretFile,key+"\n",{flag:"wx",mode:0o600});
+    }
+    await db.query("BEGIN");
+    await db.query("INSERT INTO hr_staff(email,password_hash,access_key_hash,permissions) VALUES($1,$2,$3,$4)",
+      [staffEmail,process.env.HR_PASSWORD_HASH,crypto.createHash("sha256").update(key).digest("hex"),["invite","review","issue"]]);
+    await db.query("INSERT INTO hr_assignments(staff,invitation) SELECT $1,id FROM invitations",[staffEmail]);
+    await db.query("COMMIT");
+  }
+  const url = new URL("/apply",process.env.APP_ORIGIN).href;
   await QRCode.toFile(path.join(dir, "sample-invite.png"), url, {
     width: 480,
     margin: 4,
@@ -142,7 +159,7 @@ try {
       "\nSign-in mail: .local/outbox\n",
   );
   console.log(
-    "Ready. Sample invitation and QR in .local. HR sign-in details are in .local/hr-access.txt.",
+    "Ready. Sample invitation and QR in .local. HR sign-in details are in .local/hr-access.txt and the separate key is in .local/hr-access-key.txt.",
   );
 } finally {
   await db.end();

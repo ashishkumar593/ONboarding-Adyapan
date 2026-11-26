@@ -1,21 +1,21 @@
 import { exportReceived } from "../services/received-export";
 import { roster, importRoster, exportRoster } from "../services/roster";
 import {
-  verifyInvitation,
+  verifyRosterEmail,
   redeemAccess,
-  emailInvitation,
+  changeAccess,
+
 } from "../services/access-mail";
 import { cookies } from "next/headers";
 import { NextRequest, NextResponse } from "next/server";
 import QRCode from "qrcode";
-import { auth, hrPassword, session, setSession } from "../services/auth";
+import { auth, login, permit, assigned, requireFresh, logAccess, setSession } from "../services/auth";
 import {
   details,
   hash,
   pool,
   Problem,
   requireThat,
-  transaction,
 } from "../services/db";
 import {
   createInvite,
@@ -24,7 +24,7 @@ import {
   internAction,
   review,
 } from "../services/flow";
-import { get, mail } from "../services/private";
+import { get } from "../services/private";
 type Context = { params: Promise<{ action: string }> };
 const json = (body: unknown, status = 200) =>
   NextResponse.json(body, { status, headers: { "Cache-Control": "no-store" } });
@@ -70,6 +70,12 @@ export async function GET(req: NextRequest, ctx: Context) {
         )
       ).rows[0];
       requireThat(file, "File unavailable.", 404);
+      if (user.hr) {
+        permit(user,"review","issue");
+        await assigned(user,file.invitation);
+        if (!user.permissions.includes("review")) requireThat(["signed","issued"].includes(file.slot),"File unavailable.",404);
+        await logAccess(user,"file requested",file.invitation,file.id);
+      }
       if (q.get("format") === "json") {
         requireThat(file.slot === "issued" && file.mime === "application/pdf", "Issued offer unavailable.", 404);
         const bytes = await get(file.id);
@@ -89,27 +95,55 @@ export async function GET(req: NextRequest, ctx: Context) {
         },
       });
     }
-    await auth(true);
-    if (action === "received-export") return json(await exportReceived());
+    const staff = await auth(true);
+    if (action === "me") return json({email:staff.staff,permissions:staff.permissions});
+    if (action === "received-export") {
+      permit(staff,"export"); requireFresh(staff);
+      const bundle = await exportReceived(staff.staff);
+      await logAccess(staff,"export prepared",null,null,{files:bundle.files.length,scope:"assigned"});
+      return json(bundle);
+    }
     if (action === "received-export-file") {
+      permit(staff,"export"); requireFresh(staff);
       const id = uuid(q.get("id"));
       const file = await pool.query(
-        `SELECT 1 FROM files f JOIN invitations i ON i.id=f.invitation
-         WHERE f.id=$1 AND f.slot <> 'original' AND (i.reference IS NOT NULL OR i.status IN ('submitted','correction','issued'))`,
-        [id],
+        `SELECT f.invitation FROM files f JOIN invitations i ON i.id=f.invitation
+         JOIN hr_assignments a ON a.invitation=i.id AND a.staff=$2 WHERE f.id=$1 AND f.slot <> 'original' AND (i.reference IS NOT NULL OR i.status IN ('submitted','correction','issued'))`,
+        [id,staff.staff],
       );
       requireThat(file.rowCount, "This export document is unavailable.", 404);
-      return json({ content: (await get(id)).toString("base64") });
+      const bytes = await get(id);
+      await logAccess(staff,"file exported",file.rows[0].invitation,id,{bytes:bytes.length});
+      return json({ content: bytes.toString("base64") });
     }
-    if (action === "list") return json(await roster());
-    if (action === "roster-xlsx")
-      return await exportRoster(q.get("group") || "pending");
-    if (action === "record")
-      return json(await details(pool, uuid(q.get("id"))));
+    if (action === "list") return json(await roster(staff));
+    if (action === "roster-xlsx") {
+      const group = q.get("group") || "pending";
+      if (group === "template") permit(staff,"invite");
+      else {
+        permit(staff,"export"); requireFresh(staff);
+        await logAccess(staff,"roster export requested",null,null,{group});
+      }
+      return await exportRoster(group,staff);
+    }
+    if (action === "record") {
+      const id = uuid(q.get("id"));
+      await assigned(staff,id);
+      const inv = await details(pool,id);
+      const received = !!inv.reference || ["submitted","issued","correction"].includes(inv.status);
+      if (received) permit(staff,"review","issue");
+      else permit(staff,"invite");
+      if (!received) return json({...inv,token:"",draft:{},files:[],issued_file:null});
+        if (!staff.permissions.includes("review")) {
+          inv.files = inv.files.filter(f=>["signed","issued"].includes(f.slot));
+          inv.draft = {name:inv.draft.name,employeeId:inv.draft.employeeId};
+        }
+      return json({...inv,token:""});
+    }
     if (action === "qr") {
-      const inv = await details(pool, uuid(q.get("id")));
+      permit(staff,"invite");
       const bytes = await QRCode.toBuffer(
-        process.env.APP_ORIGIN + "/i/" + inv.token,
+        new URL("/apply",process.env.APP_ORIGIN).href,
         { width: 520, margin: 4 },
       );
       return new Response(new Uint8Array(bytes), {
@@ -136,7 +170,7 @@ export async function POST(req: NextRequest, ctx: Context) {
       "Choose a file up to 8 MB.",
       413,
     );
-    if (!["verify-invitation", "redeem-link", "hr-login", "logout"].includes(action))
+    if (!["roster-login", "redeem-link", "hr-login", "logout"].includes(action))
       await auth(!["draft", "upload", "submit"].includes(action));
     const body = req.body?.getReader();
     requireThat(body, "Empty request.");
@@ -155,8 +189,9 @@ export async function POST(req: NextRequest, ctx: Context) {
     const data = await new Response(new Blob(parts), {
       headers: { "Content-Type": req.headers.get("content-type") || "" },
     }).formData();
-    if (action === "verify-invitation") {
-      const sessionToken = await verifyInvitation(emailAddress(data), field(data, "token", 32));
+    if (action === "roster-login") {
+      const sessionToken = await verifyRosterEmail(emailAddress(data));
+      if (!sessionToken) return json({ emailSent: true });
       await setSession(sessionToken);
       return json({ ok: true });
     }
@@ -168,49 +203,10 @@ export async function POST(req: NextRequest, ctx: Context) {
       await setSession(token);
       return json({ ok: true });
     }
-    if (action === "email-invitation") {
-      await emailInvitation(uuid(field(data, "id")));
-      return json({ ok: true });
-    }
     if (action === "hr-login") {
-      const email = emailAddress(data),
-        password = field(data, "password", 256);
-      requireThat(
-        email === process.env.HR_EMAIL,
-        "Check your sign-in details.",
-        401,
-      );
-      const token = await transaction(async (db) => {
-        await db.query(
-          "INSERT INTO hr_login(account) VALUES($1) ON CONFLICT DO NOTHING",
-          [email],
-        );
-        const row = (
-          await db.query(
-            "SELECT *,since>now()-interval '10 minutes' AS recent FROM hr_login WHERE account=$1 FOR UPDATE",
-            [email],
-          )
-        ).rows[0];
-        requireThat(
-          !row.recent || row.failures < 8,
-          "Try again in ten minutes.",
-          429,
-        );
-        if (!hrPassword(password)) {
-          await db.query(
-            "UPDATE hr_login SET failures=$1,since=CASE WHEN $2 THEN since ELSE now() END WHERE account=$3",
-            [row.recent ? row.failures + 1 : 1, row.recent, email],
-          );
-          return null;
-        }
-        await db.query("UPDATE hr_login SET failures=0 WHERE account=$1", [
-          email,
-        ]);
-        return session(db, null);
-      });
-      requireThat(token, "Check your sign-in details.", 401);
-      await setSession(token, true);
-      return json({ ok: true });
+      const token = await login(emailAddress(data), field(data,"password",256), field(data,"accessKey",256));
+      await setSession(token,true);
+      return json({ok:true});
     }
     if (action === "logout") {
       const key = data.get("hr") === "1" ? "ady_hr" : "ady_intern",
@@ -230,14 +226,23 @@ export async function POST(req: NextRequest, ctx: Context) {
       );
       return json(await internAction(user.invitation, action, data));
     }
-    if (action === "import-roster") return json(await importRoster(data));
-    if (action === "send-queued")
-      return json({
-        sent: await emailInvitation(uuid(field(data, "id")), true),
-      });
-    if (action === "invite") return json(await createInvite(data));
-    if (["issue", "correct", "notify"].includes(action))
-      return json(await review(uuid(field(data, "id")), action, data));
+    const staff = await auth(true);
+    if (action === "import-roster" || action === "add-intern") {
+      permit(staff,"invite");
+      return json(action === "add-intern" ? await createInvite(data,staff.staff) : await importRoster(data,staff.staff));
+    }
+    const id = uuid(field(data,"id"));
+    await assigned(staff,id);
+    if (action === "revoke" || action === "restore") {
+      permit(staff,"invite"); requireFresh(staff);
+      return json(await changeAccess(id,staff.staff,action === "restore"));
+    }
+    if (["issue","correct","notify"].includes(action)) {
+      if (action === "issue") {permit(staff,"issue"); requireFresh(staff);}
+      else if (action === "notify") permit(staff,"review","issue");
+      else permit(staff,"review");
+      return json(await review(id,action,data,staff));
+    }
     throw new Problem("Unavailable.", 404);
   } catch (e) {
     return error(e);

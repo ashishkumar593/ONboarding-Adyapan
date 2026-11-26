@@ -1,34 +1,50 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
-import {
-  S3Client,
-  PutObjectCommand,
-  GetObjectCommand,
-} from "@aws-sdk/client-s3";
 import nodemailer from "nodemailer";
-import { PDFDocument } from "pdf-lib";
+import { screenDocument, validateDocument } from "./screen";
+import { pool } from "./db";
+import type { PoolClient } from "pg";
 import { demo, requireThat, Problem } from "./db";
 const directory = () =>
   path.resolve(
     /* turbopackIgnore: true */ process.env.PRIVATE_DIR || ".local/private",
   );
-const s3 = () =>
-  new S3Client({
-    region: process.env.AWS_REGION || "auto",
-    endpoint: process.env.S3_ENDPOINT,
-    forcePathStyle: !!process.env.S3_ENDPOINT,
-  });
+const cloudinaryConfig = () => {
+  const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
+  const apiKey = process.env.CLOUDINARY_API_KEY;
+  const apiSecret = process.env.CLOUDINARY_API_SECRET;
+  return cloudName && apiKey && apiSecret ? { cloudName, apiKey, apiSecret } : null;
+};
+const cloudinarySign = (params: Record<string, string | number>, apiSecret: string) => {
+  const payload = Object.keys(params)
+    .filter((k) => params[k] !== undefined && params[k] !== "")
+    .sort()
+    .map((k) => `${k}=${params[k]}`)
+    .join("&");
+  return crypto.createHash("sha1").update(payload + apiSecret).digest("hex");
+};
 export async function put(id: string, data: Uint8Array, mime: string) {
-  if (process.env.S3_BUCKET) {
-    await s3().send(
-      new PutObjectCommand({
-        Bucket: process.env.S3_BUCKET,
-        Key: id,
-        Body: data,
-        ContentType: mime,
-      }),
+  const cld = cloudinaryConfig();
+  if (cld) {
+    const ts = Math.floor(Date.now() / 1000);
+    const form = new FormData();
+    form.append("file", new Blob([Buffer.from(data)], { type: mime }), id);
+    form.append("public_id", id);
+    form.append("type", "private");
+    form.append("timestamp", String(ts));
+    form.append("api_key", cld.apiKey);
+    form.append(
+      "signature",
+      cloudinarySign({ public_id: id, timestamp: ts, type: "private" }, cld.apiSecret),
     );
+    const res = await fetch(`https://api.cloudinary.com/v1_1/${cld.cloudName}/raw/upload`, {
+      method: "POST",
+      body: form,
+    });
+    if (!res.ok) {
+      throw new Problem(`Storage upload failed (${res.status}).`, 502);
+    }
     return;
   }
   requireThat(demo(), "Private storage requires configuration.", 503);
@@ -39,12 +55,22 @@ export async function put(id: string, data: Uint8Array, mime: string) {
     { flag: "wx" },
   );
 }
-export async function get(id: string): Promise<Buffer> {
-  if (process.env.S3_BUCKET) {
-    const obj = await s3().send(
-      new GetObjectCommand({ Bucket: process.env.S3_BUCKET, Key: id }),
-    );
-    return Buffer.from(await obj.Body!.transformToByteArray());
+async function readObject(id: string): Promise<Buffer> {
+  const cld = cloudinaryConfig();
+  if (cld) {
+    const ts = Math.floor(Date.now() / 1000);
+    const qs = new URLSearchParams({
+      public_id: id,
+      type: "private",
+      timestamp: String(ts),
+      api_key: cld.apiKey,
+      signature: cloudinarySign({ public_id: id, timestamp: ts, type: "private" }, cld.apiSecret),
+    });
+    const res = await fetch(`https://api.cloudinary.com/v1_1/${cld.cloudName}/raw/download?${qs}`);
+    if (!res.ok) {
+      throw new Problem(`Storage read failed (${res.status}).`, res.status === 404 ? 404 : 502);
+    }
+    return Buffer.from(await res.arrayBuffer());
   }
   requireThat(demo(), "Private storage requires configuration.", 503);
   return fs.readFile(
@@ -77,25 +103,23 @@ export async function upload(file: FormDataEntryValue | null, pdfOnly = false) {
     "Choose a file up to 8 MB.",
   );
   const data = Buffer.from(await file.arrayBuffer());
-  let mime = "";
-  if (data.subarray(0, 5).toString() === "%PDF-") {
-    try {
-      const doc = await PDFDocument.load(data);
-      requireThat(doc.getPageCount() > 0, "Empty PDF.");
-      mime = "application/pdf";
-    } catch {
-      throw new Problem("Choose a readable, unlocked PDF.");
-    }
-  } else if (
-    !pdfOnly &&
-    data.subarray(0, 8).equals(Buffer.from("89504e470d0a1a0a", "hex"))
-  )
-    mime = "image/png";
-  else if (!pdfOnly && data[0] === 255 && data[1] === 216 && data[2] === 255)
-    mime = "image/jpeg";
-  requireThat(
-    mime,
-    pdfOnly ? "Choose a readable, unlocked PDF." : "Choose a PDF, PNG or JPEG.",
-  );
+  await screenDocument(data);
+  const mime = await validateDocument(data,pdfOnly);
   return { data, name: file.name.slice(0, 180), mime };
+}
+
+export const contentDigest = (data: Uint8Array) => crypto.createHash("sha256").update(data).digest("hex");
+
+export async function get(id: string, db: Pick<PoolClient,"query"> = pool) {
+  const file = (await db.query("SELECT clean_digest,mime,slot FROM files WHERE id=$1",[id])).rows[0];
+  requireThat(file,"File unavailable.",404);
+  const data = await readObject(id);
+  const digest = contentDigest(data);
+  if (file.clean_digest !== digest) {
+    requireThat(!file.clean_digest,"Stored document failed its integrity check.",503);
+    await screenDocument(data);
+    requireThat(await validateDocument(data,file.mime === "application/pdf") === file.mime,"Stored document format mismatch.",422);
+    await db.query("UPDATE files SET clean_digest=$2 WHERE id=$1 AND clean_digest IS NULL",[id,digest]);
+  }
+  return data;
 }

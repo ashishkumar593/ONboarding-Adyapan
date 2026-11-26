@@ -1,17 +1,8 @@
 import crypto from "node:crypto";
 import type { PoolClient } from "pg";
 import { hash, pool, requireThat, transaction } from "./db";
-import { rosterGroup } from "@shared/model";
 import { session } from "./auth";
 import { mail } from "./private";
-
-export async function invitationStatus(token: string): Promise<string | null> {
-  if (!/^[\w-]{32}$/.test(token)) return null;
-  const { rows } = await pool.query<{ status: string }>(
-    "SELECT status FROM invitations WHERE token=$1", [token],
-  );
-  return rows[0]?.status ?? null;
-}
 
 type Recipient = {
   id: string;
@@ -20,7 +11,7 @@ type Recipient = {
   email: string;
   role: string;
 };
-type MailKind = "invitation" | "correction" | "issued";
+type MailKind = "correction" | "issued" | "return";
 
 export async function sendAccessMail(
   db: PoolClient,
@@ -28,15 +19,9 @@ export async function sendAccessMail(
   kind: MailKind,
   correctionLabel?: string,
 ) {
-  const secret = crypto.randomBytes(32).toString("base64url");
-  const href = new URL("/apply", process.env.APP_ORIGIN);
-  href.searchParams.set("invite", recipient.token);
-  href.hash = "access=" + secret;
+  const href = new URL("/apply",process.env.APP_ORIGIN);
   const messages = {
-    invitation: [
-      "Your Adyapan internship invitation",
-      "You’re invited to onboard as " + recipient.role + ".",
-    ],
+    return: ["Your personal onboarding link","Confirm your email to reopen your saved record."],
     correction: [
       "Adyapan onboarding correction",
       "Please replace your " + correctionLabel + " in the portal.",
@@ -47,14 +32,13 @@ export async function sendAccessMail(
     ],
   };
   const [subject, intro] = messages[kind];
-  await db.query(
-    "DELETE FROM email_access_links WHERE invitation=$1 AND expires_at<=now()",
-    [recipient.id],
-  );
-  await db.query(
-    "INSERT INTO email_access_links(digest,invitation,expires_at) VALUES($1,$2,now()+interval '48 hours')",
-    [hash(secret), recipient.id],
-  );
+  if (kind === "return") {
+    const secret = crypto.randomBytes(32).toString("base64url");
+    href.searchParams.set("invite",recipient.token);
+    href.hash="access="+secret;
+    await db.query("DELETE FROM email_access_links WHERE invitation=$1 AND expires_at<=now()",[recipient.id]);
+    await db.query("INSERT INTO email_access_links(digest,invitation,expires_at) VALUES($1,$2,now()+interval '48 hours')",[hash(secret),recipient.id]);
+  }
   await mail(
     recipient.email,
     subject,
@@ -63,57 +47,61 @@ export async function sendAccessMail(
       intro,
       "Open your application:",
       href.toString(),
-      "Keep this invitation private. If prompted, enter the email address HR invited.",
+      "Use the email address on your HR roster.",
       "Adyapan People Operations",
     ].join("\n\n"),
   );
 }
 
-export async function emailInvitation(id: string, onlyPending = false) {
-  return transaction(async (db) => {
-    const recipient = (
-      await db.query(
-        "SELECT id, token, name, email, role, status, reference, invitation_email_sent_at FROM invitations WHERE id=$1 FOR UPDATE",
-        [id],
-      )
-    ).rows[0];
-    requireThat(recipient, "Invitation unavailable.", 404);
-    const group = rosterGroup(recipient);
-    if (onlyPending && group !== "pending") return false;
-    requireThat(group !== "received", "This intern has already submitted their documents.", 409);
-    await sendAccessMail(db, recipient, "invitation");
-    await db.query(
-      "UPDATE invitations SET invitation_email_sent_at=now(), status=CASE WHEN status='queued' THEN 'invited' ELSE status END WHERE id=$1",
-      [id],
-    );
-    return true;
-  });
-}
-
-export async function verifyInvitation(email: string, token: string) {
-  return transaction(async (db) => {
-    const result = await db.query(
-      "SELECT id FROM invitations WHERE token=$1 AND email=$2 AND status <> 'queued'",
-      [token, email],
-    );
-    requireThat(result.rowCount, "Check the email address and use the invitation HR sent you.", 401);
-    return session(db, result.rows[0].id);
+export async function verifyRosterEmail(email: string) {
+  return transaction(async db => {
+    const recipient = (await db.query(
+      `SELECT *,status IN ('queued','invited') AND draft='{}'::jsonb AND reference IS NULL
+          AND NOT EXISTS(SELECT 1 FROM files WHERE invitation=i.id)
+          AND NOT EXISTS(SELECT 1 FROM sessions WHERE invitation=i.id) AS first_claim,
+          last_access_request_at>now()-interval '1 minute' AS recently_mailed
+       FROM invitations i WHERE lower(email)=$1
+       ORDER BY starts DESC,created_at DESC,id DESC LIMIT 1 FOR UPDATE`,
+      [email])).rows[0];
+    requireThat(recipient && !recipient.access_revoked_at,"Check the email address or contact HR to join the roster.",401);
+    if (recipient.first_claim) {
+      await db.query("UPDATE invitations SET status='draft',qr_expires_at=NULL WHERE id=$1",[recipient.id]);
+      return session(db,recipient.id);
+    }
+    if (!recipient.recently_mailed) {
+      await sendAccessMail(db,recipient,"return");
+      await db.query("UPDATE invitations SET last_access_request_at=now() WHERE id=$1",[recipient.id]);
+    }
+    return null;
   });
 }
 
 export async function redeemAccess(token: string, secret: string) {
-  return transaction(async (db) => {
-    const row = (
-      await db.query(
-        "DELETE FROM email_access_links AS l USING invitations AS i WHERE l.invitation=i.id AND i.token=$1 AND l.digest=$2 AND l.expires_at>now() RETURNING i.id",
-        [token, hash(secret)],
-      )
-    ).rows[0];
-    requireThat(
-      row,
-      "This link has expired or has already been used. Enter your invited email to continue.",
-      401,
-    );
-    return session(db, row.id);
+  return transaction(async db => {
+    const recipient = (await db.query("SELECT id FROM invitations WHERE token=$1 AND access_revoked_at IS NULL FOR UPDATE",[token])).rows[0];
+    const used = recipient && (await db.query(
+      "DELETE FROM email_access_links WHERE invitation=$1 AND digest=$2 AND expires_at>now() RETURNING invitation",
+      [recipient.id,hash(secret)])).rowCount;
+    requireThat(used,"This link has expired or has already been used. Enter your invited email to continue.",401);
+    await db.query("UPDATE invitations SET qr_expires_at=NULL WHERE id=$1",[recipient.id]);
+    await db.query("DELETE FROM sessions WHERE invitation=$1 AND verified_at IS NULL",[recipient.id]);
+    const value = await session(db,recipient.id);
+    await db.query("UPDATE sessions SET verified_at=now(),method='mail' WHERE digest=$1",[hash(value)]);
+    return value;
+  });
+}
+
+export async function changeAccess(id: string, actor: string, restore: boolean) {
+  return transaction(async db => {
+    const row = (await db.query("SELECT * FROM invitations WHERE id=$1 FOR UPDATE",[id])).rows[0];
+    requireThat(row,"Record unavailable.",404);
+    if (restore) requireThat(row.access_revoked_at,"Access is already active.",409);
+    const token = crypto.randomBytes(24).toString("base64url");
+    await db.query("UPDATE invitations SET token=$2,access_revoked_at=CASE WHEN $3 THEN NULL ELSE now() END,qr_expires_at=NULL,last_access_request_at=NULL WHERE id=$1",[id,token,restore]);
+    await db.query("DELETE FROM sessions WHERE invitation=$1",[id]);
+    await db.query("DELETE FROM email_access_links WHERE invitation=$1",[id]);
+
+    await db.query("INSERT INTO events(invitation,action,detail) VALUES($1,$2,$3)",[id,restore?"access restored":"access revoked",{actor}]);
+    return {ok:true};
   });
 }

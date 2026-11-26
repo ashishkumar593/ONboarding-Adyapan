@@ -12,10 +12,10 @@ import "./welcome.css";
 
 const stages = [
   {
-    title: "Open your invitation",
-    text: "Follow the personal link HR sends to your inbox.",
+    title: "Open the onboarding portal",
+    text: "Use the shared link or QR code from HR.",
     detail:
-      "Open the email from Adyapan and select Open my application. If you scan your invitation QR code, enter the email address HR invited to open your application.",
+      "Open the shared onboarding link or scan the QR from HR. Enter the email address on the roster.",
     icon: MailCheck,
   },
   {
@@ -34,10 +34,8 @@ const stages = [
   },
 ];
 
-export default function Welcome({ token = "" }: { token?: string }) {
-  const applyUrl = token
-    ? "/apply?invite=" + encodeURIComponent(token)
-    : "/apply";
+export default function Welcome() {
+  const applyUrl = "/apply";
   return (
     <main className="welcome shell" id="main-content">
       <section className="welcome-intro" aria-labelledby="welcome-title">
@@ -49,7 +47,7 @@ export default function Welcome({ token = "" }: { token?: string }) {
             <em>starts here.</em>
           </h1>
           <p className="welcome-lead">
-            Use your invitation email to set up your profile, submit your
+            Use your registered email to set up your profile, submit your
             documents and receive your signed offer letter.
           </p>
           <div className="welcome-actions">
@@ -61,7 +59,7 @@ export default function Welcome({ token = "" }: { token?: string }) {
             </a>
           </div>
           <p className="welcome-access">
-            <ShieldCheck size={16} aria-hidden="true" /> Invitation-only access
+            <ShieldCheck size={16} aria-hidden="true" /> For registered interns
           </p>
         </div>
         <div className="welcome-photo">
@@ -108,7 +106,7 @@ export default function Welcome({ token = "" }: { token?: string }) {
           </div>
         </section>
         <aside className="welcome-prep" aria-label="Onboarding preparation">
-          <ReadinessChecklist key={token} invitation={token} />
+          <ReadinessChecklist invitation="onboarding" />
           <div className="resume-note">
             <BookmarkCheck size={21} strokeWidth={1.6} aria-hidden="true" />
             <div>

@@ -27,7 +27,7 @@ function sheet(workbook: ExcelJS.Workbook, name: string, columns: [string, numbe
   return page;
 }
 
-export async function exportReceived(): Promise<ReceivedExport> {
+export async function exportReceived(staff: string): Promise<ReceivedExport> {
   // Read related metadata in one database snapshot. Stored file IDs are immutable.
   const { rows } = await pool.query<ReceivedRecord>(`
     SELECT i.id,i.name,i.email,i.role,i.starts,i.ends,i.status,i.draft,i.reference,
@@ -37,8 +37,9 @@ export async function exportReceived(): Promise<ReceivedExport> {
       ARRAY(SELECT jsonb_build_object('created_at',s.created_at,'snapshot',s.snapshot)
             FROM submissions s WHERE s.invitation=i.id ORDER BY s.created_at,s.id) AS submissions
     FROM invitations i
-    WHERE i.reference IS NOT NULL OR i.status IN ('submitted','correction','issued')
-    ORDER BY i.name,i.id`);
+    JOIN hr_assignments a ON a.invitation=i.id AND a.staff=$1
+    WHERE (i.reference IS NOT NULL OR i.status IN ('submitted','correction','issued'))
+    ORDER BY i.name,i.id`,[staff]);
 
   const book = new ExcelJS.Workbook();
   const interns = sheet(book, "Documents received", [

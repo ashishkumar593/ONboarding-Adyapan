@@ -26,6 +26,7 @@ import {
 export default function Intern({ token }: { token: string }) {
   const [inv, setInv] = useState<Invitation | null>(null),
     [ready, setReady] = useState(false),
+    [emailSent, setEmailSent] = useState(false),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false);
   const [email, setEmail] = useState(""),
@@ -89,7 +90,8 @@ export default function Intern({ token }: { token: string }) {
     }
   }
   async function verifyEmail() {
-    await request("verify-invitation", form({ email, token }));
+    const result = await request("roster-login", form({ email }));
+    if (result.emailSent) { setEmailSent(true); return; }
     await load(true);
   }
   async function openInvitation() {
@@ -210,7 +212,7 @@ export default function Intern({ token }: { token: string }) {
       <div className="crumb">
         <a href="/">Onboarding Portal</a>
         <i>/</i>
-        {!inv ? "Invitation" : done ? "Confirmation" : "Your application"}
+        {!inv ? "Intern login" : done ? "Confirmation" : "Your application"}
       </div>
       {!ready ? (
         <p role="status">Loading your application…</p>
@@ -220,7 +222,7 @@ export default function Intern({ token }: { token: string }) {
             <MailCheck />
           </div>
           <div className="eyebrow">Adyapan Onboarding Portal</div>
-          <h1>{access ? "Your personal invitation" : "Open your invitation"}</h1>
+          <h1>{access ? "Resume onboarding" : "Intern login"}</h1>
           {access ? (
             <>
               <p>
@@ -235,9 +237,10 @@ export default function Intern({ token }: { token: string }) {
                 {busy ? "Opening…" : "Open my application"}
               </button>
             </>
-          ) : token ? (
+          ) : (
             <>
-              <p>Enter the email address HR used for this invitation.</p>
+              {emailSent && <p className="notice" role="status">Check your invited inbox for a fresh personal link.</p>}
+              <p>Enter the email address on the HR roster.</p>
               <form
                 onSubmit={(e) => {
                   e.preventDefault();
@@ -245,7 +248,7 @@ export default function Intern({ token }: { token: string }) {
                 }}
               >
                 <label>
-                  Invited email address
+                  Registered email address
                   <input
                     required
                     autoComplete="email"
@@ -260,8 +263,7 @@ export default function Intern({ token }: { token: string }) {
                 </button>
               </form>
             </>
-          ) : (
-            <p>Open the invitation HR sent you or scan your invitation QR code to continue.</p>
+
           )}
         </section>
       ) : done ? (
@@ -302,7 +304,7 @@ export default function Intern({ token }: { token: string }) {
       ) : (
         <>
           <div className="eyebrow">
-            <UserRound size={15} /> Verified invitation
+            <UserRound size={15} /> Roster match
           </div>
           <h1>Your application</h1>
           <div className="summary-box">
@@ -390,7 +392,7 @@ export default function Intern({ token }: { token: string }) {
                 <label>
                   Email address
                   <input type="email" name="email" value={inv.email} readOnly />
-                  <small>Verified through your invitation.</small>
+                  <small>Registered by HR.</small>
                 </label>
                 <div className="twocol">
                   <label>
