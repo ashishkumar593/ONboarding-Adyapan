@@ -87,6 +87,9 @@ test.beforeAll(async () => {
         PRIVATE_DIR: path.join(dir, "files"),
         OUTBOX_DIR: path.join(dir, "mail"),
         S3_BUCKET: "",
+        CLOUDINARY_CLOUD_NAME: "",
+        CLOUDINARY_API_KEY: "",
+        CLOUDINARY_API_SECRET: "",
         SMTP_URL: "",
         SIGNING_URL: "",
         HR_STAMP_PATH: path.join(dir, "test-stamp.png"),
@@ -290,10 +293,34 @@ test("HR invitation, phone onboarding, correction and idempotent PDF issuance", 
   await intern.getByRole("button", { name: "Continue to terms" }).click();
   await intern.getByText("Review your details and uploads").click();
   await expect(intern.getByText("ADY-IN-007")).toBeVisible();
-  const displayedTerms = (await intern.locator(".onboarding-terms").innerText()).replace(/\s+/g, " ").trim();
-  expect(displayedTerms).toBe(process.env.TERMS_TEXT?.replace(/\s+/g, " ").trim() || "I confirm that my details and uploaded documents are accurate. I agree that Adyapan may review these records for my internship onboarding.");
-  const acknowledgement = intern.getByRole("checkbox", { name: "I agree to the terms and conditions.", exact: true });
+  const agreement = await (await intern.request.get("/api/application")).json();
+  const policies = intern.locator(".signing-policy");
+  await expect(policies).toHaveCount(2);
+  const displayedTerms = [agreement.terms];
+  for (const [index, policy] of agreement.policies.entries()) {
+    const section = policies.nth(index);
+    await expect(section.getByRole("heading", {name: policy.title})).toBeVisible();
+    const clauses = await section.getByRole("listitem").allTextContents();
+    expect(clauses).toHaveLength(index === 0 ? 6 : 5);
+    const introduction = section.locator("p");
+    displayedTerms.push(policy.title);
+    if (await introduction.count()) displayedTerms.push(await introduction.innerText());
+    displayedTerms.push(...clauses.map((clause, i) => `${i + 1}. ${clause}`));
+    const href = await section.getByRole("link", {name: /Open original PDF/}).getAttribute("href");
+    const pdf = await intern.request.get(href);
+    expect(pdf.status()).toBe(200);
+    expect(pdf.headers()["content-type"]).toBe("application/pdf");
+    expect(crypto.createHash("sha256").update(await pdf.body()).digest("hex")).toBe(policy.sha256);
+  }
+  const acknowledgementText = "I have read and agree to the Confidentiality Agreement and the Liquidated Damages Addendum.";
+  const acknowledgement = intern.getByRole("checkbox", { name: acknowledgementText, exact: true });
   await expect(acknowledgement).not.toBeChecked();
+  const stale = await intern.request.post("/api/submit", {
+    headers: { Origin: origin },
+    multipart: { invitation: inviteId, revision: agreement.revision, version: "previous-terms",
+      signatureMode: "type", signature: "Aarya Test", agreed: "yes" },
+  });
+  expect(stale.status()).toBe(400);
   async function sign(typed = false) {
     await acknowledgement.check();
     if (typed) {
@@ -326,9 +353,10 @@ test("HR invitation, phone onboarding, correction and idempotent PDF issuance", 
   expect(firstSubmission.draft.employeeId).toBe("ADY-IN-007");
   expect(firstSubmission.files).toHaveLength(7);
   expect(firstSubmission.signatureMode).toBe("draw");
-  expect(firstSubmission.terms.replace(/\s+/g, " ").trim()).toBe(displayedTerms);
-  expect(firstSubmission.version).toBe(process.env.TERMS_VERSION || "development-1");
-  expect(firstSubmission.acknowledgement).toBe("I agree to the terms and conditions.");
+  expect(firstSubmission.terms).toBe(displayedTerms.join("\n\n"));
+  expect(firstSubmission.version).toBe(agreement.version);
+  expect(firstSubmission.policies).toEqual(agreement.policies.map(({title, file, sha256}) => ({title, file, sha256})));
+  expect(firstSubmission.acknowledgement).toBe(acknowledgementText);
   expect(firstSubmission.drawing[0].length).toBeGreaterThan(1);
   const receipt = await (await intern.request.get("/api/application")).json();
   expect(receipt.reference).toMatch(/^ADY-/);

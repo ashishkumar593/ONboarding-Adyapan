@@ -732,6 +732,14 @@ dialog p {
 .onboarding-terms {
   white-space: pre-line;
 }
+.signing-policy {
+  border-top: 1px solid var(--line);
+  padding: 1rem 0;
+  line-height: 1.6;
+}
+.signing-policy h4 { margin: 0; font-size: 1.08rem; }
+.signing-policy ol { padding-inline-start: 1.6rem; }
+.signing-policy li + li { margin-top: .65rem; }
 .signature-field {
   margin: 0;
   padding: 16px;

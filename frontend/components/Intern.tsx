@@ -477,7 +477,19 @@ export default function Intern({ token }: { token: string }) {
                 })}
               </details>
               <h3>Terms and conditions</h3>
-              <p className="onboarding-terms">{inv.terms}</p>
+              {inv.terms && <p className="onboarding-terms">{inv.terms}</p>}
+              {inv.policies.map(policy => (
+                <section key={policy.sha256} className="signing-policy">
+                  <h4>{policy.title}</h4>
+                  {policy.introduction && <p className="onboarding-terms">{policy.introduction}</p>}
+                  <ol>{policy.clauses.map(clause => <li key={clause}>{clause}</li>)}</ol>
+                  <a href={`/api/signing-policy?file=${encodeURIComponent(policy.file)}`}
+                    target="_blank" rel="noreferrer"
+                    aria-label={`Open original PDF for ${policy.title} (opens in a new tab)`}>
+                    Open original PDF
+                  </a>
+                </section>
+              ))}
               <small>Terms version {inv.version}</small>
               <form
                 onSubmit={(e) => {

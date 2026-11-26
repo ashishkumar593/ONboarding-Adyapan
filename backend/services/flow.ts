@@ -194,7 +194,7 @@ export async function internAction(id: string, action: string, data: FormData) {
       requireThat(
         (mode === "draw" || signature.length >= 2) &&
           data.get("agreed") === "yes" &&
-          inv.terms &&
+          inv.policies.length > 0 &&
           inv.version &&
           data.get("version") === inv.version,
         "Read the current terms, agree, and sign your name.",
@@ -207,7 +207,14 @@ export async function internAction(id: string, action: string, data: FormData) {
         email: inv.email,
         draft: inv.draft,
         files: docs.map((f) => f!.id),
-        terms: inv.terms,
+        terms: [
+          inv.terms,
+          ...inv.policies.map(policy => [
+            policy.title, policy.introduction,
+            ...policy.clauses.map((clause, index) => `${index + 1}. ${clause}`),
+          ].filter(Boolean).join("\n\n")),
+        ].filter(Boolean).join("\n\n"),
+        policies: inv.policies.map(({ title, file, sha256 }) => ({ title, file, sha256 })),
         version: inv.version,
         signature,
         agreed: true,

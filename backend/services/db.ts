@@ -1,6 +1,7 @@
 import "server-only";
 import { Pool, types, type PoolClient } from "pg";
 import crypto from "node:crypto";
+import { signingPolicies } from "./signing-policies";
 import { currentRequirements, type Invitation } from "@shared/model";
 types.setTypeParser(1082, (value) => value);
 const globals = globalThis as typeof globalThis & { adyPool?: Pool };
@@ -38,13 +39,16 @@ export function requireThat(
   if (!ok) throw new Problem(message, status);
 }
 export const demo = () => process.env.PORTAL_MODE === "local";
-export const terms = () => ({
-  terms: process.env.TERMS_TEXT ||
-    (demo()
-      ? "I confirm that my details and uploaded documents are accurate. I agree that Adyapan may review these records for my internship onboarding."
-      : ""),
-  version: process.env.TERMS_VERSION || (demo() ? "development-1" : ""),
-});
+export const terms = () => {
+  const declaration = process.env.TERMS_TEXT ||
+    (demo() ? "I confirm that my details and uploaded documents are accurate. I agree that Adyapan may review these records for my internship onboarding." : "");
+  const digest = hash(JSON.stringify([declaration, signingPolicies])).slice(0, 16);
+  return {
+    terms: declaration,
+    policies: signingPolicies,
+    version: [process.env.TERMS_VERSION, digest].filter(Boolean).join("-"),
+  };
+};
 export const hash = (s: string) =>
   crypto.createHash("sha256").update(s).digest("hex");
 export const safeEqual = (a: string, b: string) =>

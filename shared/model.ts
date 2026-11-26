@@ -1,5 +1,12 @@
 import requiredDocuments from "./intern-documents.json";
-export const termsAcknowledgement = "I agree to the terms and conditions.";
+export const termsAcknowledgement = "I have read and agree to the Confidentiality Agreement and the Liquidated Damages Addendum.";
+export type SigningPolicy = {
+  title: string;
+  file: string;
+  sha256: string;
+  introduction: string;
+  clauses: string[];
+};
 export type Slot = { id: string; label: string };
 export type Doc = {
   id: string;
@@ -37,6 +44,7 @@ export type Invitation = {
   notified_at: string | null;
   files: Doc[];
   terms: string;
+  policies: SigningPolicy[];
   version: string;
 };
 export const statuses: Record<string, string> = {

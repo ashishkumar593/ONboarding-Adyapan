@@ -25,6 +25,7 @@ import {
   review,
 } from "../services/flow";
 import { get } from "../services/private";
+import { readPolicyPdf, signingPolicies } from "../services/signing-policies";
 type Context = { params: Promise<{ action: string }> };
 const json = (body: unknown, status = 200) =>
   NextResponse.json(body, { status, headers: { "Cache-Control": "no-store" } });
@@ -60,6 +61,18 @@ export async function GET(req: NextRequest, ctx: Context) {
         401,
       );
       return json(inv);
+    }
+    if (action === "signing-policy") {
+      await auth();
+      const policy = signingPolicies.find(item => item.file === q.get("file"));
+      requireThat(policy, "Policy unavailable.", 404);
+      return new Response(new Uint8Array(await readPolicyPdf(policy)), {
+        headers: {
+          "Content-Type": "application/pdf",
+          "Content-Disposition": `inline; filename="${policy.file}"`,
+          "Cache-Control": "private, no-store",
+        },
+      });
     }
     if (action === "file") {
       const user = await auth(q.get("hr") === "1");

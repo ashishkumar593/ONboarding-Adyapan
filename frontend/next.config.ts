@@ -4,6 +4,7 @@ const repository = path.resolve(__dirname, "..");
 const config: NextConfig = {
   turbopack: { root: repository },
   outputFileTracingRoot: repository,
+  outputFileTracingIncludes: { "/api/*": ["./policies/*.pdf"] },
   poweredByHeader: false,
   serverExternalPackages: [
     "pg",
