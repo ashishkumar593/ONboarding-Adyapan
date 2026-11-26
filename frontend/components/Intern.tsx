@@ -10,7 +10,7 @@ import {
   UserRound,
 } from "lucide-react";
 import { decodeFile, form, request, RequestError, fileUrl, sendFile } from "./client";
-import IssuedOffer, { StatusOffer } from "./IssuedOffer";
+import IssuedOffer from "./IssuedOffer";
 import SignatureField from "./SignatureField";
 import { validDrawing } from "@shared/signature";
 import {
@@ -249,8 +249,7 @@ export default function Intern({ token }: { token: string }) {
         <section className="panel">
           <h1>Application status</h1>
           <p role="status">{statuses[summary.status]}</p>
-          {summary.status === "issued" ? <StatusOffer key={summary.email} /> :
-            <p>Contact HR for help with your saved details and documents.</p>}
+          <p>{summary.status === "issued" ? "Contact HR for a copy of your stamped offer letter." : "Contact HR for help with your saved details and documents."}</p>
           <button className="secondary" disabled={busy} onClick={() => run(() => load())}>Refresh status</button>
         </section>
       ) : !inv ? (

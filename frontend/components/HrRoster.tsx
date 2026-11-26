@@ -169,39 +169,51 @@ export default function HrRoster({
                 : "Import the Excel sheet to give listed interns access."}
             </p>
           </div>
-          <div className="row">
-            {group !== "received" && (
-              <>
-                <button className="button" disabled={busy} onClick={create}>
-                  <Plus size={16} />
-                  Add intern
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "0.75rem" }}>
+            <div className="row">
+              {group !== "received" && (
+                <>
+                  <button className="button" disabled={busy} onClick={create}>
+                    <Plus size={16} />
+                    Add intern
+                  </button>
+                  <button
+                    className="secondary"
+                    disabled={busy}
+                    aria-expanded={importing}
+                    onClick={() => setImporting(!importing)}
+                  >
+                    <Upload size={16} />
+                    Import Excel
+                  </button>
+                </>
+              )}
+              {group === "received" ? (
+                <button className="button" disabled={exportDisabled} onClick={() => run(downloadRoster)}>
+                  <Download size={16} />
+                  Export Excel
                 </button>
-                <button
-                  className="secondary"
-                  disabled={busy}
-                  aria-expanded={importing}
-                  onClick={() => setImporting(!importing)}
-                >
-                  <Upload size={16} />
-                  Import Excel
-                </button>
-              </>
-            )}
-            {group === "received" ? (<>
-              <button className="button" disabled={exportDisabled} onClick={() => run(downloadRoster)}>
-                <Download size={16} />
-                Export Excel
-              </button>
-              <button className="secondary" disabled={exportDisabled} onClick={() => run(downloadReceived)}>
-                <Download size={16} />
-                Export Excel + documents
-              </button>
-            </>) : permissions.includes("export") && (
-              <a className="secondary" href={excelUrl(group)} download onClick={e=>{ e.preventDefault(); void run(downloadRoster); }}>
-                <Download size={16} />
-                Export Excel
-              </a>
-            )}
+              ) : permissions.includes("export") && (
+                <a className="secondary" href={excelUrl(group)} download onClick={e=>{ e.preventDefault(); void run(downloadRoster); }}>
+                  <Download size={16} />
+                  Export Excel
+                </a>
+              )}
+            </div>
+            {group === "received" && <div className="row received-date-filters">
+              <label>Received month
+                <select value={month} disabled={busy} onChange={e => setView({ ...view, month: e.target.value, page: 1 })}>
+                  <option value="">All months</option>
+                  {months.map((label, index) => <option key={label} value={String(index + 1).padStart(2, "0")}>{label}</option>)}
+                </select>
+              </label>
+              <label>Received year
+                <select value={year} disabled={busy} onChange={e => setView({ ...view, year: e.target.value, page: 1 })}>
+                  <option value="">All years</option>
+                  {years.map(y => <option key={y}>{y}</option>)}
+                </select>
+              </label>
+            </div>}
           </div>
         </div>
         {importing && (
@@ -282,20 +294,6 @@ export default function HrRoster({
             placeholder="Name, email or internship role"
           />
         </label>
-        {group === "received" && <div className="row received-date-filters">
-          <label>Received month
-            <select value={month} disabled={busy} onChange={e => setView({ ...view, month: e.target.value, page: 1 })}>
-              <option value="">All months</option>
-              {months.map((label, index) => <option key={label} value={String(index + 1).padStart(2, "0")}>{label}</option>)}
-            </select>
-          </label>
-          <label>Received year
-            <select value={year} disabled={busy} onChange={e => setView({ ...view, year: e.target.value, page: 1 })}>
-              <option value="">All years</option>
-              {years.map(y => <option key={y}>{y}</option>)}
-            </select>
-          </label>
-        </div>}
         {progress && <p role="status">{progress}…</p>}
         {canRemove && selectedRows.length > 0 && (
           <div className="row roster-selection">

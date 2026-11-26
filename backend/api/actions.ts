@@ -219,8 +219,7 @@ export async function POST(req: NextRequest, ctx: Context) {
       "Choose a file up to 8 MB.",
       413,
     );
-    const offerSession = action === "stamped-offer" ? await auth(false, true) : null;
-    if (!offerSession && !["roster-login", "hr-login", "logout"].includes(action))
+    if (!["roster-login", "hr-login", "logout"].includes(action))
       await auth(!["save-progress", "draft", "upload", "submit"].includes(action), true);
     const body = req.body?.getReader();
     requireThat(body, "Empty request.");
@@ -239,27 +238,6 @@ export async function POST(req: NextRequest, ctx: Context) {
     const data = await new Response(new Blob(parts), {
       headers: { "Content-Type": req.headers.get("content-type") || "" },
     }).formData();
-    if (offerSession) {
-      const reference = field(data, "reference", 32).trim().toUpperCase();
-      const message = "Check the submission reference on your confirmation receipt.";
-      requireThat(/^ADY-[0-9A-F]{12}$/.test(reference), message, 403);
-      const { rows: [file] } = await pool.query(
-        `SELECT f.id, f.bytes FROM invitations i
-         JOIN files f ON f.id=i.issued_file AND f.invitation=i.id
-         WHERE i.id=$1 AND i.reference=$2 AND i.status='issued'
-           AND i.access_revoked_at IS NULL AND i.intern_access_expires_at>now()
-           AND f.slot='issued' AND f.mime='application/pdf'`, [offerSession.invitation, reference],
-      );
-      requireThat(file, message, 403);
-      const bytes = await get(file.id);
-      requireThat(bytes.length === file.bytes, "The stamped letter could not be read. Please try again.", 503);
-      return new Response(new Uint8Array(bytes), { headers: {
-        "Content-Type": "application/octet-stream",
-        "Content-Length": String(bytes.length),
-        "Cache-Control": "private, no-store",
-        "Content-Security-Policy": "sandbox; default-src 'none'",
-      } });
-    }
     if (action === "roster-login") {
       const session = await verifyRosterEmail(emailAddress(data));
       await setLoginCookie("ady_intern", session.token, session.expires);

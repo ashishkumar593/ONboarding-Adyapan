@@ -1,7 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
 import {
-  BriefcaseBusiness,
   FileText,
   ShieldCheck,
 } from "lucide-react";
@@ -86,10 +85,6 @@ export default function Workspace() {
     .filter(slot => inv.files.some(file => file.slot === slot.id))] : [];
   return (
     <main className={rows ? "shell hr-main" : "narrow"}>
-      <div className="crumb">
-        <a href="/">Onboarding Portal</a>
-        <i>/</i>HR workspace
-      </div>
       {error && (
         <p role="alert" className="error">
           {error}
@@ -153,10 +148,6 @@ export default function Workspace() {
         <>
           <div className="row between">
             <div>
-              <div className="eyebrow">
-                <BriefcaseBusiness size={15} />
-                People Operations
-              </div>
               <h1>HR workspace</h1>
             </div>
             <button
