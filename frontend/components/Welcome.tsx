@@ -66,8 +66,8 @@ export default function Welcome() {
           <Image
             src="/welcome-kit.webp"
             alt="A green Adyapan welcome kit with an internship offer and gold pen."
-            width={1200}
-            height={800}
+            width={911}
+            height={873}
             sizes="(max-width: 720px) 94vw, (max-width: 1440px) 46vw, 675px"
             preload
           />
